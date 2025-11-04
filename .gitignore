@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+anaconda/
+
+# Environment variables
+.env
+.env.local
+*.env
+config.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data files
+*.csv
+*.xlsx
+*.db
+*.sqlite
+*.log
+
+# Vector stores (large files)
+chroma_db/
+qdrant_storage/
+faiss_index/
+vector_store/
+
+# Models (too large)
+models/
+*.bin
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# API Keys
+secrets.json
+credentials.json
+api_keys.json
+
+# OneDrive temp files
+~$*

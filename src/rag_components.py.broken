@@ -1,0 +1,1416 @@
+#!/usr/bin/env python3
+"""
+Advanced Production-Ready Agentic RAG System
+Implements human-like thought processes with comprehensive document processing,
+vector storage, and intelligent LLM integration with enhanced debugging
+"""
+
+import asyncio
+import logging
+import uuid
+import hashlib
+import json
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Union
+from datetime import datetime
+import traceback
+
+# Core dependencies
+try:
+    import httpx
+    from qdrant_client import QdrantClient
+    from qdrant_client.http.models import Distance, VectorParams, PointStruct
+    from qdrant_client.http.exceptions import UnexpectedResponse
+    from sentence_transformers import SentenceTransformer
+    
+    # Document processing
+    import PyPDF2
+    from docx import Document as DocxDocument
+    import pandas as pd
+    import openpyxl
+    
+except ImportError as e:
+    print(f"❌ Missing dependency: {e}")
+    print("Run: pip install qdrant-client sentence-transformers PyPDF2 python-docx openpyxl pandas httpx")
+    raise
+
+# Configure advanced logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class ThoughtProcess:
+    """
+    Implements human-like thought processes for decision making
+    Mimics cognitive reasoning patterns in AI systems
+    """
+    
+    def __init__(self, agent_name: str = "RAG_Agent"):
+        self.agent_name = agent_name
+        self.thought_history = []
+        self.decision_confidence = 0.0
+        self.context_memory = []
+    
+    def think(self, situation: str, options: List[str], context: Dict = None) -> Dict[str, Any]:
+        """
+        Process a situation using human-like reasoning patterns
+        
+        Args:
+            situation: Current problem or decision point
+            options: Available choices or actions
+            context: Additional context information
+            
+        Returns:
+            Dictionary with reasoning process and decision
+        """
+        thought_start = time.time()
+        
+        # Step 1: Situation Analysis (like human initial assessment)
+        logger.info(f"🧠 {self.agent_name} thinking about: {situation}")
+        
+        analysis = {
+            "situation_complexity": len(situation.split()) / 10,  # Simple complexity metric
+            "available_options": len(options),
+            "context_relevance": len(context) if context else 0,
+            "urgency_level": self._assess_urgency(situation)
+        }
+        
+        # Step 2: Option Evaluation (like human pros/cons analysis)
+        option_scores = {}
+        for idx, option in enumerate(options):
+            score = self._evaluate_option(option, situation, context)
+            option_scores[option] = {
+                "score": score,
+                "reasoning": f"Based on relevance to '{situation}' and available context"
+            }
+        
+        # Step 3: Decision Making (like human final choice)
+        best_option = max(option_scores.keys(), key=lambda x: option_scores[x]["score"])
+        self.decision_confidence = option_scores[best_option]["score"]
+        
+        # Step 4: Record Thought Process (like human memory formation)
+        thought_record = {
+            "timestamp": datetime.now().isoformat(),
+            "situation": situation,
+            "analysis": analysis,
+            "options_evaluated": option_scores,
+            "decision": best_option,
+            "confidence": self.decision_confidence,
+            "reasoning_time": time.time() - thought_start
+        }
+        
+        self.thought_history.append(thought_record)
+        
+        # Keep memory manageable (like human forgetting)
+        if len(self.thought_history) > 100:
+            self.thought_history = self.thought_history[-50:]
+        
+        logger.info(f"💡 Decision: {best_option} (confidence: {self.decision_confidence:.2f})")
+        
+        return thought_record
+    
+    def _assess_urgency(self, situation: str) -> float:
+        """Assess urgency level based on keywords"""
+        urgent_keywords = ["error", "fail", "critical", "urgent", "emergency", "broken"]
+        urgency_score = sum(1 for keyword in urgent_keywords if keyword.lower() in situation.lower())
+        return min(urgency_score / len(urgent_keywords), 1.0)
+    
+    def _evaluate_option(self, option: str, situation: str, context: Dict) -> float:
+        """Simple option evaluation based on string similarity and context"""
+        # Basic scoring (can be enhanced with ML models)
+        common_words = set(option.lower().split()) & set(situation.lower().split())
+        base_score = len(common_words) / max(len(option.split()), len(situation.split()))
+        
+        # Context bonus
+        context_bonus = 0.1 if context else 0.0
+        
+        return min(base_score + context_bonus, 1.0)
+
+
+class DocumentProcessor:
+    """
+    Advanced document processing with human-like content understanding
+    Handles multiple file formats with intelligent chunking strategies
+    """
+    
+    def __init__(self):
+        self.supported_formats = {'.pdf', '.docx', '.txt', '.xlsx', '.xls'}
+        self.thought_process = ThoughtProcess("DocumentProcessor")
+    
+    async def process_document(self, file_path: Path, content: bytes) -> Dict[str, Any]:
+        """
+        Process document with comprehensive error handling and intelligent chunking
+        
+        Args:
+            file_path: Path object with filename and extension
+            content: Raw file content as bytes
+            
+        Returns:
+            Dictionary with processing results and extracted text chunks
+        """
+        logger.info(f"📄 Starting document processing: {file_path.name}")
+        
+        try:
+            # Step 1: Validate file type
+            file_extension = file_path.suffix.lower()
+            if file_extension not in self.supported_formats:
+                raise ValueError(f"Unsupported file format: {file_extension}")
+            
+            # Step 2: Extract text based on file type
+            extracted_text = await self._extract_text_by_type(file_extension, content, file_path.name)
+            
+            if not extracted_text or len(extracted_text.strip()) == 0:
+                raise ValueError(f"No text could be extracted from {file_path.name}")
+            
+            # Step 3: Intelligent chunking with thought process
+            chunks = await self._intelligent_chunking(extracted_text, file_path.name)
+            
+            # Step 4: Generate document metadata
+            metadata = {
+                "filename": file_path.name,
+                "file_type": file_extension,
+                "file_size": len(content),
+                "text_length": len(extracted_text),
+                "chunk_count": len(chunks),
+                "processed_at": datetime.now().isoformat(),
+                "processing_method": f"format_specific_{file_extension[1:]}"  # Remove the dot
+            }
+            
+            logger.info(f"✅ Document processed successfully: {len(chunks)} chunks created")
+            
+            return {
+                "success": True,
+                "text": extracted_text,
+                "chunks": chunks,
+                "metadata": metadata,
+                "error": None
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Document processing failed for {file_path.name}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            return {
+                "success": False,
+                "text": "",
+                "chunks": [],
+                "metadata": {"filename": file_path.name, "error": str(e)},
+                "error": str(e)
+            }
+    
+    async def _extract_text_by_type(self, file_extension: str, content: bytes, filename: str) -> str:
+        """Extract text based on specific file format"""
+        
+        logger.info(f"🔍 Extracting text from {file_extension} format")
+        
+        try:
+            if file_extension == '.pdf':
+                return await self._extract_pdf_text(content)
+            elif file_extension == '.docx':
+                return await self._extract_docx_text(content)
+            elif file_extension == '.txt':
+                return await self._extract_txt_text(content)
+            elif file_extension in ['.xlsx', '.xls']:
+                return await self._extract_excel_text(content)
+            else:
+                raise ValueError(f"Handler not implemented for {file_extension}")
+                
+        except Exception as e:
+            logger.error(f"❌ Text extraction failed for {filename}: {str(e)}")
+            raise
+    
+    async def _extract_pdf_text(self, content: bytes) -> str:
+        """Extract text from PDF with error handling"""
+        try:
+            import io
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+            
+            text = ""
+            for page_num, page in enumerate(pdf_reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not extract text from page {page_num + 1}: {str(e)}")
+                    continue
+            
+            if not text.strip():
+                raise ValueError("No readable text found in PDF")
+            
+            return text.strip()
+            
+        except Exception as e:
+            logger.error(f"❌ PDF extraction failed: {str(e)}")
+            raise ValueError(f"PDF processing error: {str(e)}")
+    
+    async def _extract_docx_text(self, content: bytes) -> str:
+        """Extract text from DOCX with structure preservation"""
+        try:
+            import io
+            doc = DocxDocument(io.BytesIO(content))
+            
+            text = ""
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text += paragraph.text + "\n"
+            
+            # Also extract text from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = " | ".join([cell.text.strip() for cell in row.cells])
+                    if row_text.strip():
+                        text += f"TABLE: {row_text}\n"
+            
+            if not text.strip():
+                raise ValueError("No readable text found in DOCX")
+            
+            return text.strip()
+            
+        except Exception as e:
+            logger.error(f"❌ DOCX extraction failed: {str(e)}")
+            raise ValueError(f"DOCX processing error: {str(e)}")
+    
+    async def _extract_txt_text(self, content: bytes) -> str:
+        """Extract text from plain text file with encoding detection"""
+        try:
+            # Try different encodings
+            for encoding in ['utf-8', 'utf-16', 'latin-1', 'cp1252']:
+                try:
+                    text = content.decode(encoding)
+                    if text.strip():
+                        return text.strip()
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+            
+            raise ValueError("Could not decode text file with any supported encoding")
+            
+        except Exception as e:
+            logger.error(f"❌ TXT extraction failed: {str(e)}")
+            raise ValueError(f"TXT processing error: {str(e)}")
+    
+    async def _extract_excel_text(self, content: bytes) -> str:
+        """Extract text from Excel files"""
+        try:
+            import io
+            
+            # Read Excel file
+            try:
+                df = pd.read_excel(io.BytesIO(content), sheet_name=None)  # Read all sheets
+            except Exception as e:
+                logger.error(f"❌ Failed to read Excel file: {str(e)}")
+                raise ValueError(f"Excel reading error: {str(e)}")
+            
+            text = ""
+            for sheet_name, sheet_data in df.items():
+                text += f"\n--- Sheet: {sheet_name} ---\n"
+                
+                # Convert dataframe to string representation
+                sheet_text = sheet_data.to_string(index=False, na_rep='')
+                text += sheet_text + "\n"
+            
+            if not text.strip():
+                raise ValueError("No readable data found in Excel file")
+            
+            return text.strip()
+            
+        except Exception as e:
+            logger.error(f"❌ Excel extraction failed: {str(e)}")
+            raise ValueError(f"Excel processing error: {str(e)}")
+    
+    async def _intelligent_chunking(self, text: str, filename: str) -> List[Dict[str, Any]]:
+        """
+        Intelligent text chunking with human-like decision making
+        Adapts chunk size and strategy based on content characteristics
+        """
+        
+        # Analyze text characteristics
+        text_length = len(text)
+        line_count = len(text.split('\n'))
+        word_count = len(text.split())
+        
+        # Use thought process to determine chunking strategy
+        situation = f"Chunking document with {word_count} words, {line_count} lines"
+        options = [
+            "small_chunks_500",    # For detailed analysis
+            "medium_chunks_1000",  # Balanced approach  
+            "large_chunks_2000"    # For context preservation
+        ]
+        
+        context = {
+            "text_length": text_length,
+            "word_count": word_count,
+            "line_count": line_count,
+            "filename": filename
+        }
+        
+        decision = self.thought_process.think(situation, options, context)
+        chosen_strategy = decision["decision"]
+        
+        # Apply chosen chunking strategy
+        if chosen_strategy == "small_chunks_500":
+            chunk_size = 500
+            overlap = 50
+        elif chosen_strategy == "medium_chunks_1000":
+            chunk_size = 1000
+            overlap = 100
+        else:  # large_chunks_2000
+            chunk_size = 2000
+            overlap = 200
+        
+        logger.info(f"🧩 Using chunking strategy: {chosen_strategy} (size: {chunk_size}, overlap: {overlap})")
+        
+        # Split text into chunks with overlap
+        chunks = []
+        words = text.split()
+        
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk_words = words[i:i + chunk_size]
+            chunk_text = ' '.join(chunk_words)
+            
+            if len(chunk_text.strip()) > 10:  # Skip tiny chunks
+                chunk_id = hashlib.md5(chunk_text.encode()).hexdigest()[:8]
+                
+                chunks.append({
+                    "id": f"{filename}_{chunk_id}",
+                    "text": chunk_text.strip(),
+                    "chunk_index": len(chunks),
+                    "word_count": len(chunk_words),
+                    "source_file": filename,
+                    "chunking_strategy": chosen_strategy
+                })
+        
+        logger.info(f"📊 Created {len(chunks)} chunks using {chosen_strategy} strategy")
+        return chunks
+
+
+class VectorStoreManager:
+    """
+    Advanced vector store management with intelligent indexing
+    Handles Qdrant operations with human-like decision making
+    """
+    
+    def __init__(self, host: str = "localhost", port: int = 6333):
+        self.host = host
+        self.port = port
+        self.client = None
+        self.collection_name = "rag_documents"
+        self.embedding_dim = 384  # sentence-transformers/all-MiniLM-L6-v2 dimension
+        self.thought_process = ThoughtProcess("VectorStore")
+        
+    async def initialize(self) -> Dict[str, Any]:
+        """Initialize vector store with comprehensive error handling"""
+        logger.info(f"🚀 Initializing vector store at {self.host}:{self.port}")
+        
+        try:
+            # Create Qdrant client
+            self.client = QdrantClient(host=self.host, port=self.port)
+            
+            # Test connection
+            collections = await asyncio.to_thread(self.client.get_collections)
+            logger.info(f"📋 Found {len(collections.collections)} existing collections")
+            
+            # Create or verify collection
+            await self._ensure_collection_exists()
+            
+            return {
+                "status": "initialized",
+                "host": self.host,
+                "port": self.port,
+                "collection": self.collection_name,
+                "embedding_dimension": self.embedding_dim,
+                "collections_total": len(collections.collections)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Vector store initialization failed: {str(e)}")
+            return {
+                "status": "failed",
+                "error": str(e),
+                "host": self.host,
+                "port": self.port
+            }
+    
+    async def _ensure_collection_exists(self):
+        """Create collection if it doesn't exist"""
+        try:
+            collections = await asyncio.to_thread(self.client.get_collections)
+            collection_names = [c.name for c in collections.collections]
+            
+            if self.collection_name not in collection_names:
+                logger.info(f"📦 Creating new collection: {self.collection_name}")
+                
+                await asyncio.to_thread(
+                    self.client.create_collection,
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=self.embedding_dim, distance=Distance.COSINE)
+                )
+                logger.info(f"✅ Collection created: {self.collection_name}")
+            else:
+                logger.info(f"✅ Collection exists: {self.collection_name}")
+                
+        except Exception as e:
+            logger.error(f"❌ Collection creation failed: {str(e)}")
+            raise
+    
+    async def index_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> Dict[str, Any]:
+        """
+        Index document chunks in vector store with intelligent batching
+        """
+        if not chunks or not embeddings:
+            return {"success": False, "error": "No chunks or embeddings provided"}
+        
+        if len(chunks) != len(embeddings):
+            return {"success": False, "error": "Chunks and embeddings count mismatch"}
+        
+        logger.info(f"🗂️ Indexing {len(chunks)} chunks...")
+        
+        try:
+            # Use thought process to determine batching strategy
+            situation = f"Indexing {len(chunks)} document chunks"
+            options = ["batch_small_50", "batch_medium_100", "batch_large_200"]
+            
+            context = {"chunk_count": len(chunks), "memory_usage": "unknown"}
+            decision = self.thought_process.think(situation, options, context)
+            
+            # Determine batch size based on decision
+            batch_sizes = {"batch_small_50": 50, "batch_medium_100": 100, "batch_large_200": 200}
+            batch_size = batch_sizes[decision["decision"]]
+            
+            logger.info(f"📦 Using batch size: {batch_size}")
+            
+            # Process in batches
+            indexed_count = 0
+            for i in range(0, len(chunks), batch_size):
+                batch_chunks = chunks[i:i + batch_size]
+                batch_embeddings = embeddings[i:i + batch_size]
+                
+                # Create points for Qdrant
+                points = []
+                for chunk, embedding in zip(batch_chunks, batch_embeddings):
+                    point = PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "text": chunk["text"],
+                            "chunk_id": chunk["id"], 
+                            "source_file": chunk["source_file"],
+                            "chunk_index": chunk["chunk_index"],
+                            "word_count": chunk["word_count"],
+                            "indexed_at": datetime.now().isoformat()
+                        }
+                    )
+                    points.append(point)
+                
+                # Upload batch to Qdrant
+                await asyncio.to_thread(
+                    self.client.upsert,
+                    collection_name=self.collection_name,
+                    points=points
+                )
+                
+                indexed_count += len(points)
+                logger.info(f"✅ Indexed batch {i//batch_size + 1}: {indexed_count}/{len(chunks)} chunks")
+            
+            return {
+                "success": True,
+                "indexed_count": indexed_count,
+                "batch_size": batch_size,
+                "batches_processed": (len(chunks) + batch_size - 1) // batch_size
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Indexing failed: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def search(self, query_embedding: List[float], limit: int = 5) -> Dict[str, Any]:
+        """Search vector store with comprehensive results"""
+        try:
+            results = await asyncio.to_thread(
+                self.client.search,
+                collection_name=self.collection_name,
+                query_vector=query_embedding,
+                limit=limit
+            )
+            
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "id": str(result.id),
+                    "score": float(result.score),
+                    "text": result.payload.get("text", ""),
+                    "source_file": result.payload.get("source_file", ""),
+                    "chunk_id": result.payload.get("chunk_id", ""),
+                    "chunk_index": result.payload.get("chunk_index", 0),
+                    "word_count": result.payload.get("word_count", 0)
+                })
+            
+            return {
+                "success": True,
+                "results": formatted_results,
+                "result_count": len(formatted_results)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Vector search failed: {str(e)}")
+            return {"success": False, "error": str(e), "results": []}
+    
+    async def search_with_filter(self, query_embedding: List[float], limit: int = 5, source_filter: str = "") -> Dict[str, Any]:
+        """
+        Search vector store with filtering by source file
+        """
+        try:
+            results = await asyncio.to_thread(
+                self.client.search,
+                collection_name=self.collection_name,
+                query_vector=query_embedding,
+                limit=limit
+            )
+            
+            # Apply source filtering
+            if source_filter:
+                results = [r for r in results if source_filter.lower() in r.payload.get("source_file", "").lower()]
+            
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "id": str(result.id),
+                    "score": float(result.score),
+                    "text": result.payload.get("text", ""),
+                    "source_file": result.payload.get("source_file", ""),
+                    "chunk_id": result.payload.get("chunk_id", ""),
+                    "chunk_index": result.payload.get("chunk_index", 0),
+                    "word_count": result.payload.get("word_count", 0)
+                })
+            
+            return {
+                "success": True,
+                "results": formatted_results,
+                "result_count": len(formatted_results)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Vector search with filter failed: {str(e)}")
+            return {"success": False, "error": str(e), "results": []}
+
+
+class LLMManager:
+    """
+    Advanced LLM management with intelligent model selection and context optimization
+    """
+    
+    def __init__(self, base_url: str = "http://localhost:11434"):
+        self.base_url = base_url
+        self.available_models = []
+        self.current_model = None
+        self.thought_process = ThoughtProcess("LLMManager")
+    
+    async def initialize(self) -> Dict[str, Any]:
+        """Initialize LLM connection with model discovery"""
+        logger.info(f"🤖 Initializing LLM manager at {self.base_url}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Test Ollama connection
+                response = await client.get(f"{self.base_url}/api/tags")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    self.available_models = [model["name"] for model in data.get("models", [])]
+                    
+                    # Select best available model with preference order
+                    model_preference = ["phi:latest", "mistral:latest", "llama2:latest"]
+                    
+                    self.current_model = None
+                    for preferred_model in model_preference:
+                        if preferred_model in self.available_models:
+                            self.current_model = preferred_model
+                            break
+                    
+                    # Fallback to first available model
+                    if not self.current_model and self.available_models:
+                        self.current_model = self.available_models[0]
+                    
+                    # Test the selected model
+                    if self.current_model:
+                        test_result = await self._test_model(self.current_model)
+                        if not test_result:
+                            logger.warning(f"⚠️ Selected model {self.current_model} failed test, trying alternatives...")
+                            # Try other models if the selected one fails
+                            for model in self.available_models:
+                                if model != self.current_model:
+                                    test_result = await self._test_model(model)
+                                    if test_result:
+                                        self.current_model = model
+                                        logger.info(f"✅ Switched to working model: {model}")
+                                        break
+                    
+                    logger.info(f"✅ LLM initialized with {len(self.available_models)} models")
+                    logger.info(f"🎯 Selected model: {self.current_model}")
+                    
+                    return {
+                        "status": "initialized",
+                        "base_url": self.base_url,
+                        "available_models": self.available_models,
+                        "current_model": self.current_model,
+                        "model_count": len(self.available_models)
+                    }
+                else:
+                    raise Exception(f"Ollama API returned status {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"❌ LLM initialization failed: {str(e)}")
+            return {
+                "status": "failed",
+                "error": str(e),
+                "base_url": self.base_url
+            }
+    
+    async def _test_model(self, model_name: str) -> bool:
+        """Test if a model is working properly"""
+        try:
+            logger.info(f"🧪 Testing model: {model_name}")
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                test_payload = {
+                    "model": model_name,
+                    "prompt": "Hello. Please respond with just 'Test OK'.",
+                    "options": {
+                        "temperature": 0.1,
+                        "num_predict": 10
+                    },
+                    "stream": False
+                }
+                
+                response = await client.post(f"{self.base_url}/api/generate", json=test_payload)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    test_response = result.get("response", "").strip()
+                    logger.info(f"✅ Model {model_name} test response: '{test_response}'")
+                    return len(test_response) > 0
+                else:
+                    logger.error(f"❌ Model {model_name} test failed with status {response.status_code}")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"❌ Model {model_name} test error: {str(e)}")
+            return False
+    
+    async def generate_response(self, query: str, context_chunks: List[str], 
+                          max_tokens: int = 1024, temperature: float = 0.7) -> Dict[str, Any]:
+        """
+        Generate response with enhanced error handling and fallback strategies
+        """
+        if not self.current_model:
+            return {"success": False, "error": "No model available"}
+        
+        logger.info(f"🤔 Generating response with model: {self.current_model}")
+        logger.info(f"📊 Context chunks: {len(context_chunks)}, Query length: {len(query)}")
+        
+        try:
+            # Step 1: Optimize context to prevent token overflow
+            optimized_context = self._smart_context_optimization(context_chunks, query)
+            logger.info(f"📝 Optimized to {len(optimized_context)} context pieces")
+            
+            # Step 2: Build a clean, simple prompt
+            prompt = self._build_simple_prompt(query, optimized_context)
+            prompt_length = len(prompt)
+            logger.info(f"📏 Prompt length: {prompt_length} characters")
+            
+            # Step 3: Validate prompt length (prevent oversized prompts)
+            if prompt_length > 8000:  # Conservative limit
+                logger.warning("⚠️ Prompt too long, using summary approach")
+                prompt = self._build_summary_prompt(query, optimized_context[:2])  # Use only top 2 chunks
+            
+            # Step 4: Generate with optimized settings
+            response_data = await self._try_generate(prompt, max_tokens, temperature)
+            
+            if response_data["success"]:
+                generated_text = response_data["response"].strip()
+                logger.info(f"✅ Response generated: {len(generated_text)} characters")
+                
+                return {
+                    "success": True,
+                    "response": generated_text,
+                    "model_used": self.current_model,
+                    "context_chunks_used": len(optimized_context),
+                    "prompt_length": len(prompt),
+                    "generation_info": {
+                        "temperature": temperature,
+                        "max_tokens": max_tokens
+                    }
+                }
+            else:
+                logger.error(f"❌ Generation failed: {response_data['error']}")
+                return {"success": False, "error": response_data["error"]}
+                
+        except Exception as e:
+            logger.error(f"❌ Response generation failed: {str(e)}")
+            logger.error(f"Exception traceback: {traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    def _smart_context_optimization(self, chunks: List[str], query: str) -> List[str]:
+        """Smart context optimization based on query and chunk relevance"""
+        if not chunks:
+            return []
+        
+        # For queries under 50 chars, use fewer chunks to keep prompt focused
+        if len(query) < 50:
+            max_chunks = 2
+        else:
+            max_chunks = 3
+        
+        # Truncate very long chunks to prevent token overflow
+        optimized = []
+        for chunk in chunks[:max_chunks]:
+            if len(chunk) > 1500:  # Truncate long chunks
+                truncated = chunk[:750] + "... [content truncated] ..." + chunk[-750:]
+                optimized.append(truncated)
+            else:
+                optimized.append(chunk)
+        
+        return optimized
+    
+    def _build_simple_prompt(self, query: str, context_chunks: List[str]) -> str:
+        """Build a clean, simple prompt that works reliably"""
+        if not context_chunks:
+            return f"Question: {query}\nAnswer:"
+        
+        context_text = "\n\n".join(context_chunks)
+        
+        # Simple, reliable prompt format
+        prompt = f"""Based on the following information, please answer the question clearly and concisely.
+
+CONTEXT:
+{context_text}
+
+QUESTION: {query}
+
+INSTRUCTIONS:
+1. Use the provided context to answer the question
+2. If the context doesn't contain relevant information, say so clearly
+3. Be specific and cite relevant details from the context
+4. Provide a helpful and comprehensive answer
+5. If multiple perspectives exist in the context, present them
+
+ANSWER:"""
+        
+        return prompt
+    
+    async def _try_generate(self, prompt: str, max_tokens: int, temperature: float, timeout: float) -> Dict[str, Any]:
+        """Optimized generation with response completion guarantees"""
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # Optimized payload for speed and completion
+                payload = {
+                    "model": self.current_model,
+                    "prompt": prompt,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                        "top_p": 0.9,
+                        "top_k": 40,                    # Faster sampling
+                        "repeat_penalty": 1.1,         # Prevent repetition
+                        "seed": 42,                     # Consistent results
+                        "num_ctx": 2048,               # Context window
+                        "num_batch": 512,              # Batch size for speed
+                        "num_gpu": 1,                  # Use GPU if available
+                        "num_thread": 4                # CPU threads
+                    },
+                    "stream": False,
+                    "keep_alive": "5m"                 # Keep model loaded
+                }
+                
+                logger.info(f"🚀 Generation attempt (timeout: {timeout}s, max_tokens: {max_tokens})")
+                
+                response = await client.post(f"{self.base_url}/api/generate", json=payload)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    generated_text = result.get("response", "").strip()
+                    
+                    # Check for truncation indicators
+                    is_truncated = self._is_response_truncated(generated_text)
+                    
+                    if generated_text:
+                        if is_truncated:
+                            logger.warning(f"⚠️ Response may be truncated: {len(generated_text)} chars")
+                            # Try to complete the response
+                            completed_text = await self._attempt_completion(generated_text, prompt)
+                            return {"success": True, "response": completed_text, "was_truncated": is_truncated}
+                        else:
+                            return {"success": True, "response": generated_text, "was_truncated": False}
+                    else:
+                        return {"success": False, "error": "Empty response from model"}
+                else:
+                    # Parse error details
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get("error", response.text)
+                    except:
+                        error_msg = response.text
+                    
+                    logger.error(f"❌ Ollama error (status {response.status_code}): {error_msg}")
+                    return {"success": False, "error": f"HTTP {response.status_code}: {error_msg}"}
+                    
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Generation timeout after {timeout} seconds")
+            return {"success": False, "error": f"Timeout after {timeout} seconds"}
+        except httpx.TimeoutException:
+            logger.error(f"❌ HTTP timeout after {timeout} seconds")
+            return {"success": False, "error": f"HTTP timeout after {timeout} seconds"}
+        except Exception as e:
+            logger.error(f"❌ Generation attempt failed: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+    def _is_response_truncated(self, text: str) -> bool:
+        """Detect if response was likely truncated"""
+        if not text:
+            return True
+        
+        # Check for truncation indicators
+        truncation_indicators = [
+            len(text) < 20,                           # Too short
+            not text.endswith(('.', '!', '?')),       # Incomplete sentence
+            text.endswith((' ', '-', ',')),           # Trailing punctuation
+            'Based on the provided document' in text and len(text) < 50  # Incomplete start
+        ]
+        
+        return any(truncation_indicators)
+
+    async def _attempt_completion(self, partial_text: str, original_prompt: str) -> str:
+        """Attempt to complete a truncated response"""
+        try:
+            # Create a completion prompt
+            completion_prompt = f"""Continue this response to completion:
+
+{partial_text}
+
+Please complete the above response naturally and end with proper punctuation."""
+            
+            logger.info("🔄 Attempting response completion...")
+            
+            # Use shorter timeout for completion
+            result = await self._try_generate_simple(completion_prompt, 200, 0.3, 15.0)
+            
+            if result["success"]:
+                completion = result["response"].strip()
+                # Combine original + completion
+                combined = partial_text + " " + completion
+                logger.info(f"✅ Response completed: {len(combined)} total chars")
+                return combined
+            else:
+                logger.warning("⚠️ Completion failed, returning partial response")
+                return partial_text
+                
+        except Exception as e:
+            logger.error(f"❌ Completion attempt failed: {str(e)}")
+            return partial_text
+
+    async def _try_generate_simple(self, prompt: str, max_tokens: int, temperature: float, timeout: float) -> Dict[str, Any]:
+        """Simple generation for completions"""
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                payload = {
+                    "model": self.current_model,
+                    "prompt": prompt,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                        "num_ctx": 1024,
+                        "seed": 42
+                    },
+                    "stream": False
+                }
+                
+                response = await client.post(f"{self.base_url}/api/generate", json=payload)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return {"success": True, "response": result.get("response", "").strip()}
+                else:
+                    return {"success": False, "error": f"HTTP {response.status_code}"}
+                    
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _generate_with_fallbacks(self, prompt: str, max_tokens: int, temperature: float) -> Dict[str, Any]:
+        """Speed-optimized generation with smart fallbacks"""
+        
+        # Strategy 1: Fast generation with optimized settings
+        logger.info("⚡ Strategy 1: Fast optimized generation")
+        result = await self._try_generate(prompt, max_tokens, temperature, timeout=20.0)
+        if result["success"] and not result.get("was_truncated", False):
+            return result
+        
+        # Strategy 2: Reduced context with medium timeout
+        logger.warning("⚠️ Fast attempt failed/truncated, trying medium approach...")
+        reduced_prompt = self._reduce_prompt_size(prompt)
+        result = await self._try_generate(reduced_prompt, max_tokens // 2, temperature, timeout=25.0)
+        if result["success"]:
+            return result
+        
+        # Strategy 3: Minimal prompt with short timeout
+        logger.warning("⚠️ Medium attempt failed, trying minimal approach...")
+        minimal_prompt = self._create_minimal_prompt(prompt)
+        result = await self._try_generate(minimal_prompt, 150, 0.3, timeout=15.0)
+        if result["success"]:
+            return result
+        
+        # All strategies failed
+        return {"success": False, "error": "All generation strategies failed after speed optimization"}
+
+    def _reduce_prompt_size(self, prompt: str) -> str:
+        """Reduce prompt size while keeping essential info"""
+        lines = prompt.split('\n')
+        
+        # Keep question and first context piece
+        essential_lines = []
+        found_question = False
+        context_lines = 0
+        
+        for line in lines:
+            if 'Question:' in line:
+                found_question = True
+                essential_lines.append(line)
+            elif 'Answer:' in line:
+                essential_lines.append(line)
+                break
+            elif found_question or context_lines < 5:  # Keep first 5 context lines
+                essential_lines.append(line)
+                if line.strip():  # Count non-empty lines
+                    context_lines += 1
+        
+        return '\n'.join(essential_lines)
+
+    def _create_minimal_prompt(self, original_prompt: str) -> str:
+        """Create minimal prompt for emergency fallback"""
+        # Extract just the question
+        if 'Question:' in original_prompt:
+            question_part = original_prompt.split('Question:')[-1].split('Answer:')[0].strip()
+            return f"Question: {question_part}\nAnswer:"
+        else:
+            # Fallback to first 200 chars
+            return original_prompt[:200] + "\nAnswer:"
+
+    def _build_contextual_prompt(self, query: str, context_chunks: List[str]) -> str:
+        """Build optimized prompt with context"""
+        context_separator = "\n\n---\n\n"
+        context_text = context_separator.join(context_chunks)
+        
+        prompt = f"""You are an intelligent AI assistant with access to relevant document context. 
+Use the provided context to answer questions accurately and comprehensively.
+
+CONTEXT INFORMATION:
+{context_text}
+
+QUESTION: {query}
+
+INSTRUCTIONS:
+1. Use the provided context to answer the question
+2. If the context doesn't contain relevant information, say so clearly
+3. Be specific and cite relevant details from the context
+4. Provide a helpful and comprehensive answer
+5. If multiple perspectives exist in the context, present them
+
+ANSWER:"""
+        
+        return prompt
+
+# ...existing code...
+
+class RAGSystem:
+    """
+    Main RAG System orchestrator with human-like intelligence
+    Coordinates all components for optimal performance
+    """
+    
+    def __init__(self):
+        # Initialize components
+        self.document_processor = DocumentProcessor()
+        self.vector_store = VectorStoreManager()
+        self.llm_manager = LLMManager()
+        self.embedding_model = None
+        self.thought_process = ThoughtProcess("RAG_System")
+        
+        # System state
+        self.initialized = False
+        self.documents_indexed = 0
+        self.total_chunks = 0
+        
+    async def initialize(self) -> Dict[str, Any]:
+        """
+        Initialize entire RAG system with comprehensive status tracking
+        """
+        logger.info("🚀 Initializing Advanced Agentic RAG System...")
+        
+        initialization_results = {
+            "vector_store": {"status": "pending"},
+            "llm_manager": {"status": "pending"}, 
+            "embedding_model": {"status": "pending"},
+            "overall_status": "initializing"
+        }
+        
+        try:
+            # Initialize embedding model
+            logger.info("🔤 Loading embedding model...")
+            try:
+                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+                initialization_results["embedding_model"] = {
+                    "status": "initialized",
+                    "model_name": "all-MiniLM-L6-v2",
+                    "dimensions": 384
+                }
+                logger.info("✅ Embedding model loaded")
+            except Exception as e:
+                logger.error(f"❌ Embedding model failed: {str(e)}")
+                initialization_results["embedding_model"] = {"status": "failed", "error": str(e)}
+            
+            # Initialize vector store
+            logger.info("🗂️ Initializing vector store...")
+            vector_result = await self.vector_store.initialize()
+            initialization_results["vector_store"] = vector_result
+            
+            # Initialize LLM manager
+            logger.info("🤖 Initializing LLM manager...")
+            llm_result = await self.llm_manager.initialize()
+            initialization_results["llm_manager"] = llm_result
+            
+            # Check overall initialization status
+            all_initialized = all(
+                result.get("status") == "initialized" 
+                for result in initialization_results.values() 
+                if isinstance(result, dict) and result.get("status")
+            )
+            
+            if all_initialized:
+                self.initialized = True
+                initialization_results["overall_status"] = "fully_initialized"
+                logger.info("🎉 RAG System fully initialized!")
+            else:
+                initialization_results["overall_status"] = "partially_initialized"
+                logger.warning("⚠️ RAG System partially initialized - some components failed")
+            
+            return {
+                "initialized": self.initialized,
+                "components": initialization_results,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ RAG System initialization failed: {str(e)}")
+            initialization_results["overall_status"] = "failed"
+            initialization_results["error"] = str(e)
+            return initialization_results
+    
+    async def process_document(self, file_path: Path, content: bytes) -> bool:
+        """
+        Process document with comprehensive error handling and logging
+        
+        Args:
+            file_path: Path object with filename and extension
+            content: Raw file content as bytes
+            
+        Returns:
+            Boolean indicating success
+        """
+        if not self.initialized:
+            logger.error("❌ RAG System not initialized - cannot process document")
+            return False
+        
+        logger.info(f"📋 Processing document: {file_path.name} ({len(content)} bytes)")
+        
+        try:
+            # Step 1: Process document into chunks
+            logger.info("🔍 Step 1: Extracting and chunking document...")
+            doc_result = await self.document_processor.process_document(file_path, content)
+            
+            if not doc_result["success"]:
+                logger.error(f"❌ Document processing failed: {doc_result['error']}")
+                return False
+            
+            chunks = doc_result["chunks"]
+            logger.info(f"✅ Document processed: {len(chunks)} chunks created")
+            
+            # Step 2: Generate embeddings for chunks
+            logger.info("🔤 Step 2: Generating embeddings...")
+            chunk_texts = [chunk["text"] for chunk in chunks]
+            
+            try:
+                embeddings = await asyncio.to_thread(
+                    self.embedding_model.encode, 
+                    chunk_texts,
+                    show_progress_bar=False,
+                    normalize_embeddings=True
+                )
+                embeddings = embeddings.tolist()  # Convert numpy array to list
+                logger.info(f"✅ Generated {len(embeddings)} embeddings")
+                
+            except Exception as e:
+                logger.error(f"❌ Embedding generation failed: {str(e)}")
+                return False
+            
+            # Step 3: Index chunks in vector store
+            logger.info("🗂️ Step 3: Indexing chunks in vector store...")
+            index_result = await self.vector_store.index_chunks(chunks, embeddings)
+            
+            if not index_result["success"]:
+                logger.error(f"❌ Vector indexing failed: {index_result['error']}")
+                return False
+            
+            # Update system statistics
+            self.documents_indexed += 1
+            self.total_chunks += len(chunks)
+            
+            logger.info(f"🎉 Document successfully processed and indexed!")
+            logger.info(f"📊 System stats: {self.documents_indexed} documents, {self.total_chunks} total chunks")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Document processing pipeline failed: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+    
+    async def query(self, user_query: str, max_results: int = 5, source_filter: str = "") -> Dict[str, Any]:
+        """
+        Process user query with intelligent context retrieval and response generation
+        """
+        if not self.initialized:
+            logger.warning("⚠️ RAG System not initialized - using fallback response")
+            return {
+                "response": "RAG system is not fully initialized. Please check system status and try again.",
+                "using_rag": False,
+                "sources": [],
+                "context_found": 0,
+                "error": "System not initialized"
+            }
+        
+        logger.info(f"🔍 Processing query: {user_query[:100]}...")
+        
+        try:
+            # Step 1: Generate query embedding
+            logger.info("🔤 Generating query embedding...")
+            query_embedding = await asyncio.to_thread(
+                self.embedding_model.encode,
+                [user_query],
+                normalize_embeddings=True
+            )
+            query_embedding = query_embedding[0].tolist()
+            
+            # Step 2: Search vector store with filtering
+            logger.info("🗂️ Searching vector store...")
+            search_result = await self.vector_store.search_with_filter(
+                query_embedding, 
+                limit=max_results,
+                source_filter=source_filter
+            )
+            
+            if not search_result["success"]:
+                logger.error(f"❌ Vector search failed: {search_result['error']}")
+                return {
+                    "response": "I encountered an error while searching for relevant information. Please try again.",
+                    "using_rag": False,
+                    "sources": [],
+                    "context_found": 0,
+                    "error": search_result["error"]
+                }
+            
+            results = search_result["results"]
+            logger.info(f"🎯 Found {len(results)} relevant chunks")
+            
+            # Step 3: Filter results by source if needed
+            if source_filter:
+                results = [r for r in results if source_filter.lower() in r["source_file"].lower()]
+                logger.info(f"📝 After source filtering: {len(results)} chunks remain")
+            
+            # Step 4: Group results by source file and warn about mixed sources
+            sources_found = {}
+            for result in results:
+                source = result["source_file"]
+                if source not in sources_found:
+                    sources_found[source] = []
+                sources_found[source].append(result)
+            
+            if len(sources_found) > 1:
+                logger.warning(f"⚠️ Multiple sources found: {list(sources_found.keys())}")
+                # For now, use only the source with the most relevant chunks
+                primary_source = max(sources_found.keys(), key=lambda k: len(sources_found[k]))
+                results = sources_found[primary_source]
+                logger.info(f"🎯 Using primary source: {primary_source} with {len(results)} chunks")
+            
+            # Step 5: Generate response
+            if results:
+                context_chunks = [result["text"] for result in results]
+                sources = list(set([result["source_file"] for result in results]))
+                
+                logger.info("🤖 Generating response with LLM...")
+                
+                # Add source context to the prompt for accuracy
+                enhanced_query = f"Based on the document '{sources[0]}', {user_query}"
+                
+                llm_result = await self.llm_manager.generate_response(
+                    enhanced_query, context_chunks
+                )
+                
+                if llm_result["success"]:
+                    return {
+                        "response": llm_result["response"],
+                        "using_rag": True,
+                        "sources": sources,
+                        "context_found": len(results),
+                        "primary_source": sources[0] if sources else None,
+                        "confidence": 0.95,
+                        "model_info": {
+                            "model": llm_result.get("model_used"),
+                            "chunks_used": llm_result.get("context_chunks_used", 0)
+                        }
+                    }
+                else:
+                    logger.error(f"❌ LLM generation failed: {llm_result['error']}")
+                    return {
+                        "response": f"I found relevant information in {sources[0]} but couldn't generate a response. Error: {llm_result['error']}",
+                        "using_rag": False,
+                        "sources": sources,
+                        "context_found": len(results),
+                        "error": llm_result["error"]
+                    }
+            else:
+                # No relevant context found
+                logger.info("ℹ️ No relevant context found in documents")
+                return {
+                    "response": "I couldn't find relevant information in the indexed documents to answer your question. Please try rephrasing your question or check if the relevant documents have been uploaded.",
+                    "using_rag": False,
+                    "sources": [],
+                    "context_found": 0,
+                    "note": "No relevant documents found"
+                }
+        
+        except Exception as e:
+            logger.error(f"❌ Query processing failed: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                "response": f"I encountered an error while processing your query: {str(e)}",
+                "using_rag": False,
+                "sources": [],
+                "context_found": 0,
+                "error": str(e)
+            }
+    
+    async def get_system_status(self) -> Dict[str, Any]:
+        """Get comprehensive system status"""
+        return {
+            "initialized": self.initialized,
+            "documents_indexed": self.documents_indexed,
+            "total_chunks": self.total_chunks,
+            "vector_store_connected": self.vector_store.client is not None,
+            "llm_available": self.llm_manager.current_model is not None,
+            "embedding_model_loaded": self.embedding_model is not None,
+            "current_llm_model": self.llm_manager.current_model,
+            "supported_file_types": list(self.document_processor.supported_formats),
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    async def close(self):
+        """Clean shutdown of all components"""
+        logger.info("🔄 Shutting down RAG system...")
+        
+        # Close vector store connection
+        if self.vector_store.client:
+            try:
+                await asyncio.to_thread(self.vector_store.client.close)
+            except:
+                pass
+        
+        # Clear models to free memory
+        self.embedding_model = None
+        
+        logger.info("✅ RAG system shutdown complete")
+
+
+# Example usage and testing functions
+if __name__ == "__main__":
+    async def test_rag_system():
+        """Test the complete RAG system"""
+        print("🧪 Testing Advanced Agentic RAG System...")
+        
+        # Initialize system
+        rag = RAGSystem()
+        init_result = await rag.initialize()
+        print(f"Initialization result: {init_result}")
+        
+        # Test document processing (if you have a test file)
+        # test_file = Path("test_document.pdf")
+        # if test_file.exists():
+        #     with open(test_file, "rb") as f:
+        #         content = f.read()
+        #     
+        #     result = await rag.process_document(test_file, content)
+        #     print(f"Processing result: {result}")
+        # 
+        #     if result:
+        #         # Test querying
+        #         query_result = await rag.query("What is the main topic of this document?")
+        #         print(f"Query result: {query_result}")
+        
+        # Get system status
+        status = await rag.get_system_status()
+        print(f"System status: {status}")
+        
+        await rag.close()
+    
+    # Run test
+    # asyncio.run(test_rag_system())
+    print("✅ RAG Components loaded successfully!")
+    
+    # Cleanup test documents (if needed)
+    try:
+        logger.info("🧹 Starting force cleanup of test documents...")
+        
+        # Delete all points with test-related source files
+        test_patterns = ["test", "Test", "TEST"]
+        
+        for pattern in test_patterns:
+            try:
+                # Use scroll to find and delete test documents
+                scroll_result = await asyncio.to_thread(
+                    self.client.scroll,
+                    collection_name=self.collection_name,
+                    scroll_filter={
+                        "must": [
+                            {
+                                "key": "source_file",
+                                "match": {
+                                    "text": pattern
+                            }
+                        }
+                    ]
+                },
+                limit=1000
+            )
+            
+            if scroll_result[0]:  # If points found
+                point_ids = [point.id for point in scroll_result[0]]
+                
+                await asyncio.to_thread(
+                    self.client.delete,
+                    collection_name=self.collection_name,
+                    points_selector=point_ids
+                )
+                
+                logger.info(f"🗑️ Deleted {len(point_ids)} points with pattern '{pattern}'")
+            
+            except Exception as e:
+                logger.warning(f"⚠️ Could not delete pattern '{pattern}': {str(e)}")
+                continue
+        
+        logger.info("✅ Test document cleanup completed")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Force cleanup failed: {str(e)}")
+        return False

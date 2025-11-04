@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Macrocomm AI Assistant - Admin Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Open Sans', Arial, sans-serif;
+            background: #f5f6fa;
+            min-height: 100vh;
+        }
+        
+        .admin-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .sidebar {
+            width: 280px;
+            background: #2c3e50;
+            color: white;
+            padding: 0;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .sidebar-header {
+            padding: 30px 25px;
+            background: linear-gradient(45deg, #FF6E00, #FF923F);
+            text-align: center;
+        }
+        
+        .sidebar-header h2 {
+            font-size: 1.4em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .sidebar-header p {
+            opacity: 0.9;
+            font-size: 0.9em;
+        }
+        
+        .nav-menu {
+            list-style: none;
+            padding: 20px 0;
+        }
+        
+        .nav-item {
+            margin-bottom: 5px;
+        }
+        
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 15px 25px;
+            color: #bdc3c7;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-link:hover,
+        .nav-link.active {
+            background: #34495e;
+            color: #FF6E00;
+        }
+        
+        .nav-icon {
+            margin-right: 12px;
+            font-size: 1.2em;
+            width: 20px;
+        }
+        
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            font-size: 1.8em;
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 15px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #FF6E00, #FF923F);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 110, 0, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+        
+        .btn-secondary:hover {
+            background: #d5dbdb;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .stat-card {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: 700;
+            color: #FF6E00;
+            margin-bottom: 10px;
+        }
+        
+        .stat-label {
+            color: #7f8c8d;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.9em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online { background: #27ae60; }
+        .status-warning { background: #f39c12; }
+        .status-offline { background: #e74c3c; }
+        
+        .system-status {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .recent-activity {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .activity-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+        
+        .activity-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #FF6E00;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            margin-right: 15px;
+            font-size: 1.2em;
+        }
+        
+        .activity-content {
+            flex: 1;
+        }
+        
+        .activity-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 3px;
+        }
+        
+        .activity-time {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+        
+        .config-section {
+            margin-bottom: 30px;
+        }
+        
+        .config-section h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+        
+        .form-input,
+        .form-select,
+        .form-textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #ecf0f1;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s ease;
+        }
+        
+        .form-input:focus,
+        .form-select:focus,
+        .form-textarea:focus {
+            outline: none;
+            border-color: #FF6E00;
+        }
+        
+        .form-textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+        
+        .color-picker-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        
+        .color-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .color-input {
+            width: 50px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .section {
+            display: none;
+        }
+        
+        .section.active {
+            display: block;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #FF6E00;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @media (max-width: 768px) {
+            .admin-container {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+            
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="admin-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>Admin Portal</h2>
+                <p>AI Assistant Management</p>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a href="#" class="nav-link active" data-section="dashboard">
+                        <span class="nav-icon">📊</span>
+                        Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-section="conversations">
+                        <span class="nav-icon">💬</span>
+                        Conversations
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-section="configuration">
+                        <span class="nav-icon">⚙️</span>
+                        Configuration
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-section="analytics">
+                        <span class="nav-icon">📈</span>
+                        Analytics
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-section="system">
+                        <span class="nav-icon">🖥️</span>
+                        System Status
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="section active">
+                <div class="header">
+                    <h1>Dashboard Overview</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" onclick="refreshData()">
+                            🔄 Refresh
+                        </button>
+                        <a href="/frontend/widget/demo.html" class="btn btn-primary" target="_blank">
+                            🚀 View Widget Demo
+                        </a>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card stat-card">
+                        <div class="stat-number" id="totalConversations">0</div>
+                        <div class="stat-label">Total Conversations</div>
+                    </div>
+                    <div class="card stat-card">
+                        <div class="stat-number" id="activeConnections">0</div>
+                        <div class="stat-label">Active Connections</div>
+                    </div>
+                    <div class="card stat-card">
+                        <div class="stat-number" id="avgResponseTime">0ms</div>
+                        <div class="stat-label">Avg Response Time</div>
+                    </div>
+                    <div class="card stat-card">
+                        <div class="stat-number" id="systemUptime">99.9%</div>
+                        <div class="stat-label">System Uptime</div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>System Status</h3>
+                        <div class="system-status">
+                            <div class="status-item">
+                                <span>WebSocket Server</span>
+                                <span><span class="status-indicator status-online"></span>Online</span>
+                            </div>
+                            <div class="status-item">
+                                <span>AI Processing</span>
+                                <span><span class="status-indicator status-online"></span>Healthy</span>
+                            </div>
+                            <div class="status-item">
+                                <span>Vector Database</span>
+                                <span><span class="status-indicator status-online"></span>Connected</span>
+                            </div>
+                            <div class="status-item">
+                                <span>LLM Service</span>
+                                <span><span class="status-indicator status-online"></span>Operational</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Recent Activity</h3>
+                        <div class="recent-activity" id="recentActivity">
+                            <div class="activity-item">
+                                <div class="activity-icon">💬</div>
+                                <div class="activity-content">
+                                    <div class="activity-title">New conversation started</div>
+                                    <div class="activity-time">2 minutes ago</div>
+                                </div>
+                            </div>
+                            <div class="activity-item">
+                                <div class="activity-icon">🔌</div>
+                                <div class="activity-content">
+                                    <div class="activity-title">WebSocket connection established</div>
+                                    <div class="activity-time">5 minutes ago</div>
+                                </div>
+                            </div>
+                            <div class="activity-item">
+                                <div class="activity-icon">⚡</div>
+                                <div class="activity-content">
+                                    <div class="activity-title">System health check passed</div>
+                                    <div class="activity-time">10 minutes ago</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Configuration Section -->
+            <section id="configuration" class="section">
+                <div class="header">
+                    <h1>Widget Configuration</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" onclick="resetConfig()">
+                            🔄 Reset to Default
+                        </button>
+                        <button class="btn btn-primary" onclick="saveConfig()">
+                            💾 Save Configuration
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="config-section">
+                        <h3>General Settings</h3>
+                        <div class="form-group">
+                            <label class="form-label" for="welcomeMessage">Welcome Message</label>
+                            <textarea id="welcomeMessage" class="form-textarea" placeholder="Enter the welcome message that users see when they first open the chat...">👋 Welcome to Macrocomm AI Assistant! I'm here to help you with intelligent solutions and answer your questions.</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="position">Widget Position</label>
+                            <select id="position" class="form-select">
+                                <option value="bottom-right">Bottom Right</option>
+                                <option value="bottom-left">Bottom Left</option>
+                                <option value="top-right">Top Right</option>
+                                <option value="top-left">Top Left</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>Appearance</h3>
+                        <div class="color-picker-group">
+                            <div class="form-group">
+                                <label class="form-label">Primary Color</label>
+                                <div class="color-picker">
+                                    <input type="color" id="primaryColor" class="color-input" value="#FF6E00">
+                                    <span>#FF6E00</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Secondary Color</label>
+                                <div class="color-picker">
+                                    <input type="color" id="secondaryColor" class="color-input" value="#FF923F">
+                                    <span>#FF923F</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Accent Color</label>
+                                <div class="color-picker">
+                                    <input type="color" id="accentColor" class="color-input" value="#FFB67F">
+                                    <span>#FFB67F</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>Behavior Settings</h3>
+                        <div class="form-group">
+                            <label class="form-label" for="autoOpen">Auto-open Widget</label>
+                            <select id="autoOpen" class="form-select">
+                                <option value="false">No</option>
+                                <option value="true">Yes</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="enableSound">Enable Sound Notifications</label>
+                            <select id="enableSound" class="form-select">
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- System Status Section -->
+            <section id="system" class="section">
+                <div class="header">
+                    <h1>System Status</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" onclick="checkSystemHealth()">
+                            🔍 Run Health Check
+                        </button>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>Server Information</h3>
+                        <div class="system-status">
+                            <div class="status-item">
+                                <span>Server Status</span>
+                                <span id="serverStatus"><span class="status-indicator status-online"></span>Running</span>
+                            </div>
+                            <div class="status-item">
+                                <span>Port</span>
+                                <span>8000</span>
+                            </div>
+                            <div class="status-item">
+                                <span>Environment</span>
+                                <span>Development</span>
+                            </div>
+                            <div class="status-item">
+                                <span>Version</span>
+                                <span>1.0.0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Performance Metrics</h3>
+                        <div id="performanceMetrics">
+                            <div class="loading pulse"></div>
+                            <span>Loading metrics...</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // Admin Portal JavaScript
+        let currentData = {};
+
+        // Navigation handling
+        document.addEventListener('DOMContentLoaded', function() {
+            // Navigation click handlers
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    // Update active nav
+                    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // Show section
+                    const sectionId = this.dataset.section;
+                    showSection(sectionId);
+                });
+            });
+
+            // Initialize dashboard
+            loadDashboardData();
+            
+            // Auto-refresh every 30 seconds
+            setInterval(loadDashboardData, 30000);
+        });
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById(sectionId).classList.add('active');
+            
+            // Load section-specific data
+            switch(sectionId) {
+                case 'dashboard':
+                    loadDashboardData();
+                    break;
+                case 'system':
+                    checkSystemHealth();
+                    break;
+            }
+        }
+
+        async function loadDashboardData() {
+            try {
+                // Fetch health data
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                // Update dashboard metrics
+                updateDashboardMetrics(data);
+                
+            } catch (error) {
+                console.error('Failed to load dashboard data:', error);
+            }
+        }
+
+        function updateDashboardMetrics(healthData) {
+            // Update connection count
+            const connections = healthData.components?.websocket?.connections || '0';
+            document.getElementById('activeConnections').textContent = connections;
+            
+            // Update total conversations
+            const conversations = healthData.components?.conversations?.total || '0';
+            document.getElementById('totalConversations').textContent = conversations;
+            
+            // Simulate response time (in real app, this would come from metrics)
+            const responseTime = Math.floor(Math.random() * 200) + 50;
+            document.getElementById('avgResponseTime').textContent = responseTime + 'ms';
+            
+            // Update system uptime
+            const uptime = calculateUptime(healthData.timestamp);
+            document.getElementById('systemUptime').textContent = uptime;
+        }
+
+        function calculateUptime(timestamp) {
+            // This is a simplified uptime calculation
+            // In production, you'd track actual server start time
+            return '99.9%';
+        }
+
+        async function checkSystemHealth() {
+            const statusElement = document.getElementById('serverStatus');
+            const metricsElement = document.getElementById('performanceMetrics');
+            
+            try {
+                statusElement.innerHTML = '<span class="status-indicator status-warning"></span>Checking...';
+                metricsElement.innerHTML = '<div class="loading pulse"></div><span>Running health check...</span>';
+                
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                if (data.status === 'healthy') {
+                    statusElement.innerHTML = '<span class="status-indicator status-online"></span>Healthy';
+                    metricsElement.innerHTML = `
+                        <div class="system-status">
+                            <div class="status-item">
+                                <span>Response Time</span>
+                                <span>${Math.floor(Math.random() * 100) + 20}ms</span>
+                            </div>
+                            <div class="status-item">
+                                <span>Memory Usage</span>
+                                <span>${Math.floor(Math.random() * 30) + 40}%</span>
+                            </div>
+                            <div class="status-item">
+                                <span>CPU Usage</span>
+                                <span>${Math.floor(Math.random() * 20) + 10}%</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    statusElement.innerHTML = '<span class="status-indicator status-offline"></span>Issues Detected';
+                }
+                
+            } catch (error) {
+                statusElement.innerHTML = '<span class="status-indicator status-offline"></span>Connection Failed';
+                metricsElement.innerHTML = '<span style="color: #e74c3c;">❌ Health check failed</span>';
+            }
+        }
+
+        function refreshData() {
+            loadDashboardData();
+            
+            // Show refresh animation
+            const refreshBtn = event.target;
+            refreshBtn.style.transform = 'rotate(360deg)';
+            setTimeout(() => {
+                refreshBtn.style.transform = 'rotate(0deg)';
+            }, 600);
+        }
+
+        function saveConfig() {
+            const config = {
+                welcomeMessage: document.getElementById('welcomeMessage').value,
+                position: document.getElementById('position').value,
+                primaryColor: document.getElementById('primaryColor').value,
+                secondaryColor: document.getElementById('secondaryColor').value,
+                accentColor: document.getElementById('accentColor').value,
+                autoOpen: document.getElementById('autoOpen').value === 'true',
+                enableSound: document.getElementById('enableSound').value === 'true'
+            };
+            
+            // In a real application, this would save to the backend
+            localStorage.setItem('macrocomm-widget-config', JSON.stringify(config));
+            
+            // Show success message
+            alert('✅ Configuration saved successfully!');
+        }
+
+        function resetConfig() {
+            // Reset form to defaults
+            document.getElementById('welcomeMessage').value = '👋 Welcome to Macrocomm AI Assistant! I\'m here to help you with intelligent solutions and answer your questions.';
+            document.getElementById('position').value = 'bottom-right';
+            document.getElementById('primaryColor').value = '#FF6E00';
+            document.getElementById('secondaryColor').value = '#FF923F';
+            document.getElementById('accentColor').value = '#FFB67F';
+            document.getElementById('autoOpen').value = 'false';
+            document.getElementById('enableSound').value = 'true';
+            
+            // Update color display
+            updateColorDisplays();
+        }
+
+        function updateColorDisplays() {
+            const colors = ['primaryColor', 'secondaryColor', 'accentColor'];
+            colors.forEach(colorId => {
+                const input = document.getElementById(colorId);
+                const display = input.nextElementSibling;
+                display.textContent = input.value;
+            });
+        }
+
+        // Color picker change handlers
+        document.getElementById('primaryColor').addEventListener('change', function() {
+            this.nextElementSibling.textContent = this.value;
+        });
+
+        document.getElementById('secondaryColor').addEventListener('change', function() {
+            this.nextElementSibling.textContent = this.value;
+        });
+
+        document.getElementById('accentColor').addEventListener('change', function() {
+            this.nextElementSibling.textContent = this.value;
+        });
+
+        // Load saved config on page load
+        window.addEventListener('load', function() {
+            const saved = localStorage.getItem('macrocomm-widget-config');
+            if (saved) {
+                const config = JSON.parse(saved);
+                // Apply saved configuration
+                Object.keys(config).forEach(key => {
+                    const element = document.getElementById(key);
+                    if (element) {
+                        element.value = config[key];
+                    }
+                });
+                updateColorDisplays();
+            }
+        });
+    </script>
+</body>
+</html>
