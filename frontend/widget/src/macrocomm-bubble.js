@@ -689,7 +689,9 @@ class MacrocommBubble {
         switch (data.type) {
             case 'response':
                 this.hideTyping();
-                this.addMessage(data.response, 'assistant', {
+                // FIX: Try multiple response fields (backend might send different field names)
+                const responseText = data.response || data.message || data.text || data.answer;
+                this.addMessage(responseText, 'assistant', {
                     intent: data.intent,
                     confidence: data.confidence,
                     sources: data.sources
@@ -813,7 +815,11 @@ class MacrocommBubble {
         return `
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e5e5; font-size: 12px; color: #7C8082;">
                 <strong>Sources:</strong>
-                ${sources.map(source => `<br>• ${source.title || 'Document'}`).join('')}
+                ${sources.map(source => {
+                    // FIX: Handle both string arrays and object arrays
+                    const sourceName = typeof source === 'string' ? source : (source.title || source.name || 'Document');
+                    return `<br>• ${sourceName}`;
+                }).join('')}
             </div>
         `;
     }
