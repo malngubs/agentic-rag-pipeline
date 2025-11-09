@@ -5,7 +5,7 @@ A comprehensive Retrieval-Augmented Generation system that mimics human thought 
 through multi-layered cognitive architecture, adaptive reasoning, and memory systems.
 
 Author: Advanced AI Systems
-Version: 2.0 Production - COMPLETE
+Version: 2.1 Production - OpenAI Only with Document Management
 """
 
 import os
@@ -40,8 +40,8 @@ try:
 except LookupError:
     nltk.download('punkt', quiet=True)
 
-# HTTP Client
-import httpx
+# OpenAI
+import openai
 
 # =============================================================================
 # 🏗️ CONFIGURATION & ENUMS
@@ -82,9 +82,9 @@ class RAGConfig:
     reasoning_depth: int = 3
     confidence_threshold: float = 0.6
     
-    # LLM Settings
+    # LLM Settings - OpenAI Only
     openai_model: str = "gpt-4o-mini"
-    ollama_base_url: str = "http://localhost:11434"
+    openai_api_key: Optional[str] = None
     max_tokens: int = 2048
     temperature: float = 0.7
 
@@ -98,6 +98,18 @@ class MemoryChunk:
     confidence_score: float = 0.0
     access_count: int = 0
     last_accessed: Optional[datetime] = None
+
+@dataclass
+class DocumentMetadata:
+    """Metadata for indexed documents"""
+    doc_id: str
+    filename: str
+    file_type: str
+    file_size: int
+    upload_date: datetime
+    chunk_count: int
+    status: str  # 'indexed', 'processing', 'failed'
+    error_message: Optional[str] = None
 
 class WorkingMemory:
     """Working memory system (Miller's Magic Number: 7±2)"""
@@ -127,6 +139,64 @@ class WorkingMemory:
         self.active_chunks.clear()
         self.reasoning_trace.clear()
         self.confidence_history.clear()
+
+# =============================================================================
+# 📚 DOCUMENT METADATA MANAGER
+# =============================================================================
+
+class DocumentMetadataManager:
+    """Manages metadata for all indexed documents"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.documents: Dict[str, DocumentMetadata] = {}
+    
+    def add_document(self, doc_id: str, filename: str, file_type: str, 
+                     file_size: int, chunk_count: int, status: str = "indexed") -> DocumentMetadata:
+        """Add a new document to the metadata store"""
+        metadata = DocumentMetadata(
+            doc_id=doc_id,
+            filename=filename,
+            file_type=file_type,
+            file_size=file_size,
+            upload_date=datetime.now(),
+            chunk_count=chunk_count,
+            status=status
+        )
+        self.documents[doc_id] = metadata
+        self.logger.info(f"📝 Added document metadata: {filename} (ID: {doc_id})")
+        return metadata
+    
+    def get_document(self, doc_id: str) -> Optional[DocumentMetadata]:
+        """Get document metadata by ID"""
+        return self.documents.get(doc_id)
+    
+    def get_all_documents(self) -> List[DocumentMetadata]:
+        """Get all document metadata"""
+        return list(self.documents.values())
+    
+    def delete_document(self, doc_id: str) -> bool:
+        """Delete document metadata"""
+        if doc_id in self.documents:
+            del self.documents[doc_id]
+            self.logger.info(f"🗑️ Deleted document metadata: {doc_id}")
+            return True
+        return False
+    
+    def update_status(self, doc_id: str, status: str, error_message: Optional[str] = None):
+        """Update document status"""
+        if doc_id in self.documents:
+            self.documents[doc_id].status = status
+            if error_message:
+                self.documents[doc_id].error_message = error_message
+    
+    def get_total_chunks(self) -> int:
+        """Get total number of chunks across all documents"""
+        return sum(doc.chunk_count for doc in self.documents.values())
+    
+    def get_documents_by_status(self, status: str) -> List[DocumentMetadata]:
+        """Get documents filtered by status"""
+        return [doc for doc in self.documents.values() if doc.status == status]
 
 # =============================================================================
 # 🔤 DOCUMENT PROCESSING
@@ -334,8 +404,8 @@ class VectorStoreManager:
             self.logger.error(f"Embedding generation failed: {str(e)}")
             raise
     
-    async def index_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> Dict[str, Any]:
-        """Index chunks with embeddings"""
+    async def index_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]], doc_id: str) -> Dict[str, Any]:
+        """Index chunks with embeddings and document ID"""
         try:
             if len(chunks) != len(embeddings):
                 return {"success": False, "error": f"Mismatch: {len(chunks)} chunks vs {len(embeddings)} embeddings"}
@@ -350,6 +420,7 @@ class VectorStoreManager:
                         "source_file": chunk.get("source_file", ""),
                         "chunk_index": chunk.get("chunk_index", 0),
                         "word_count": chunk.get("word_count", 0),
+                        "doc_id": doc_id,  # Add document ID for tracking
                         "created_at": datetime.now().isoformat()
                     }
                 )
@@ -361,7 +432,7 @@ class VectorStoreManager:
                 lambda: self.client.upsert(collection_name=self.config.vector_collection_name, points=points)
             )
             
-            self.logger.info(f"✅ Indexed {len(chunks)} chunks")
+            self.logger.info(f"✅ Indexed {len(chunks)} chunks for document {doc_id}")
             return {"success": True, "chunks_indexed": len(chunks)}
             
         except Exception as e:
@@ -387,204 +458,223 @@ class VectorStoreManager:
                 "text": hit.payload["content"],
                 "source": hit.payload.get("source_file", ""),
                 "score": hit.score,
-                "chunk_id": hit.id
+                "chunk_id": hit.id,
+                "doc_id": hit.payload.get("doc_id", "")
             } for hit in results]
             
         except Exception as e:
             self.logger.error(f"Search failed: {str(e)}")
             return []
     
-    async def clear_test_documents(self) -> bool:
-        """Remove test documents"""
+    async def delete_document_chunks(self, doc_id: str) -> bool:
+        """Delete all chunks belonging to a document"""
         try:
-            # This is a simplified version - implement based on your needs
-            self.logger.info("Clearing test documents")
+            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            
+            # Delete points with matching doc_id
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.delete(
+                    collection_name=self.config.vector_collection_name,
+                    points_selector=Filter(
+                        must=[
+                            FieldCondition(
+                                key="doc_id",
+                                match=MatchValue(value=doc_id)
+                            )
+                        ]
+                    )
+                )
+            )
+            self.logger.info(f"✅ Deleted all chunks for document {doc_id}")
             return True
+            
         except Exception as e:
-            self.logger.error(f"Clear failed: {str(e)}")
+            self.logger.error(f"Failed to delete document chunks: {str(e)}")
             return False
-    
-    async def force_clear_test_documents(self) -> bool:
-        """Force clear all test documents"""
-        return await self.clear_test_documents()
 
 # =============================================================================
-# 🧠 LLM MANAGER
+# 🧠 LLM MANAGER - OPENAI ONLY
 # =============================================================================
 
 class LLMManager:
-    """LLM manager for adaptive reasoning"""
+    """LLM manager using OpenAI exclusively for reliable performance"""
     
     def __init__(self, config: RAGConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-        self.available_models: List[Dict[str, Any]] = []
-        self.model_performance: Dict[str, Dict[str, float]] = {}
-        self._initialize_models()
+        self.client: Optional[openai.AsyncOpenAI] = None
+        self._initialize_client()
     
-    def _initialize_models(self):
-        """Initialize available models"""
-        self.available_models = [
-            {"name": "gpt-4o-mini", "provider": "openai", "max_tokens": 2048, "temperature": 0.7},
-            {"name": "llama3.2", "provider": "llama", "max_tokens": 2048, "temperature": 0.7}
-        ]
-        self.logger.info(f"Available models: {[m['name'] for m in self.available_models]}")
-    
-    @property
-    def current_model(self) -> Optional[str]:
-        """Get current model name"""
-        return self.available_models[0]["name"] if self.available_models else None
-    
-    async def generate_response(self, query: str, context_chunks: List[str]) -> Dict[str, Any]:
-        """Generate response using context"""
+    def _initialize_client(self):
+        """Initialize OpenAI client"""
         try:
-            context = "\n\n".join(context_chunks) if context_chunks else ""
+            # Get API key from config or environment
+            api_key = self.config.openai_api_key or os.getenv("OPENAI_API_KEY")
             
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant. Use the provided context to answer accurately."},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer based on the context:"}
-            ]
+            if not api_key:
+                self.logger.error("❌ OpenAI API key not found! Set OPENAI_API_KEY environment variable.")
+                raise ValueError("OpenAI API key required")
             
-            response, confidence, metadata = await self._generate_with_strategy(messages, ReasoningStrategy.ANALYTICAL)
-            
-            return {
-                "success": True,
-                "response": response,
-                "confidence": confidence,
-                "model_used": metadata.get("model", "unknown"),
-                "context_chunks_used": len(context_chunks)
-            }
+            self.client = openai.AsyncOpenAI(api_key=api_key)
+            self.logger.info(f"✅ OpenAI client initialized with model: {self.config.openai_model}")
             
         except Exception as e:
-            self.logger.error(f"Response generation failed: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "response": "I encountered an error. Please try again."
-            }
+            self.logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+            raise
     
-    async def _generate_with_strategy(self, messages: List[Dict], strategy: ReasoningStrategy, max_attempts: int = 3) -> Tuple[str, float, Dict]:
-        """Generate response with strategy"""
-        selected_model = await self._select_model_for_strategy(strategy)
-        
-        for attempt in range(max_attempts):
+    @property
+    def current_model(self) -> str:
+        """Get current model name"""
+        return self.config.openai_model
+    
+    async def generate_response(self, query: str, context_chunks: List[str]) -> Dict[str, Any]:
+        """
+        Generate response using OpenAI with optimized prompt structure.
+        Implements best practices from LLM optimization article:
+        - Static content first (system prompt)
+        - Dynamic content last (user query)
+        - Clear instruction format
+        """
+        try:
+            # Build context string from chunks
+            context = "\n\n".join(context_chunks) if context_chunks else ""
+            
+            # OPTIMIZED PROMPT STRUCTURE: Static content first, dynamic content last
+            # This enables better token caching and improved performance
+            
+            # System prompt (static content - cached efficiently)
+            system_prompt = """You are an intelligent AI assistant with expertise in analyzing and answering questions based on provided documents.
+
+Your capabilities:
+- Provide accurate, well-structured answers based on the given context
+- Cite specific information from the context when relevant
+- Acknowledge when information is not available in the context
+- Maintain a helpful, professional tone
+
+Response guidelines:
+- Answer directly and concisely
+- Use information from the provided context
+- If context doesn't contain the answer, state this clearly
+- Format responses for readability"""
+
+            # User prompt with context and query (dynamic content - at the end)
+            if context:
+                user_prompt = f"""Context from documents:
+
+{context}
+
+---
+
+Based on the context above, please answer this question:
+{query}"""
+            else:
+                user_prompt = f"""Question: {query}
+
+Note: No specific context was provided. Please provide a helpful response based on general knowledge."""
+            
+            # Build messages array with optimized structure
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            # Generate response with error handling
+            start_time = time.time()
+            
             try:
-                self.logger.info(f"Attempt {attempt + 1} with {selected_model['name']}")
-                start_time = time.time()
-                
-                if selected_model["provider"] == "ollama":
-                    response, confidence = await self._generate_ollama_response(selected_model, messages, strategy)
-                elif selected_model["provider"] == "openai":
-                    response, confidence = await self._generate_openai_response(selected_model, messages, strategy)
-                else:
-                    raise ValueError(f"Unknown provider: {selected_model['provider']}")
+                completion = await self.client.chat.completions.create(
+                    model=self.config.openai_model,
+                    messages=messages,
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                    top_p=0.9,
+                    frequency_penalty=0.3,
+                    presence_penalty=0.3
+                )
                 
                 response_time = time.time() - start_time
-                self._update_model_performance(selected_model["name"], response_time, confidence, True)
+                response_text = completion.choices[0].message.content
                 
-                return response, confidence, {
-                    "model": selected_model["name"],
-                    "provider": selected_model["provider"],
-                    "strategy": strategy.value,
+                # Calculate confidence based on finish reason and context availability
+                confidence = self._calculate_confidence(
+                    finish_reason=completion.choices[0].finish_reason,
+                    has_context=bool(context_chunks),
+                    response_length=len(response_text)
+                )
+                
+                self.logger.info(f"✅ Generated response in {response_time:.2f}s (confidence: {confidence:.2f})")
+                
+                return {
+                    "success": True,
+                    "response": response_text,
+                    "confidence": confidence,
+                    "model_used": self.config.openai_model,
+                    "context_chunks_used": len(context_chunks),
                     "response_time": response_time
                 }
                 
-            except Exception as e:
-                self.logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
-                self._update_model_performance(selected_model["name"], 0, 0, False)
+            except openai.APIError as e:
+                self.logger.error(f"OpenAI API error: {str(e)}")
+                return {
+                    "success": False,
+                    "error": f"API error: {str(e)}",
+                    "response": "I'm experiencing technical difficulties connecting to the AI service. Please try again."
+                }
                 
-                if attempt < max_attempts - 1:
-                    selected_model = await self._select_fallback_model(selected_model)
-        
-        return ("I apologize, but I'm experiencing technical difficulties.", 0.1, {"error": "All attempts failed"})
-    
-    async def _select_model_for_strategy(self, strategy: ReasoningStrategy) -> Dict[str, Any]:
-        """Select best model for strategy"""
-        # For now, return first available
-        return self.available_models[0] if self.available_models else {"name": "default", "provider": "ollama"}
-    
-    async def _generate_ollama_response(self, model: Dict, messages: List[Dict], strategy: ReasoningStrategy) -> Tuple[str, float]:
-        """Generate response using Ollama"""
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{self.config.ollama_base_url}/api/chat",
-                    json={
-                        "model": model["name"],
-                        "messages": messages,
-                        "stream": False,
-                        "options": {
-                            "temperature": model.get("temperature", 0.7),
-                            "num_predict": model.get("max_tokens", 2048)
-                        }
-                    }
-                )
+            except openai.RateLimitError as e:
+                self.logger.error(f"OpenAI rate limit exceeded: {str(e)}")
+                return {
+                    "success": False,
+                    "error": "Rate limit exceeded",
+                    "response": "I'm currently handling many requests. Please try again in a moment."
+                }
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    content = data.get("message", {}).get("content", "")
-                    return content, 0.85
-                else:
-                    raise Exception(f"Ollama returned status {response.status_code}")
-                    
+            except openai.APIConnectionError as e:
+                self.logger.error(f"OpenAI connection error: {str(e)}")
+                return {
+                    "success": False,
+                    "error": f"Connection error: {str(e)}",
+                    "response": "I'm having trouble connecting to the AI service. Please check your internet connection and try again."
+                }
+                
         except Exception as e:
-            self.logger.error(f"Ollama generation failed: {str(e)}")
-            raise
+            self.logger.error(f"Response generation failed: {str(e)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": "I encountered an unexpected error. Please try again."
+            }
     
-    async def _generate_openai_response(self, model: Dict, messages: List[Dict], strategy: ReasoningStrategy) -> Tuple[str, float]:
-        """Generate response using OpenAI"""
-        try:
-            import openai
-            client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            
-            completion = await client.chat.completions.create(
-                model=model["name"],
-                messages=messages,
-                temperature=model.get("temperature", 0.7),
-                max_tokens=model.get("max_tokens", 2048)
-            )
-            
-            content = completion.choices[0].message.content
-            return content, 0.9
-            
-        except Exception as e:
-            self.logger.error(f"OpenAI generation failed: {str(e)}")
-            raise
-    
-    def _update_model_performance(self, model_name: str, response_time: float, confidence: float, success: bool):
-        """Track model performance"""
-        if model_name not in self.model_performance:
-            self.model_performance[model_name] = {"total_calls": 0, "successful_calls": 0, "avg_time": 0.0, "avg_confidence": 0.0}
+    def _calculate_confidence(self, finish_reason: str, has_context: bool, response_length: int) -> float:
+        """Calculate confidence score based on response characteristics"""
+        base_confidence = 0.8
         
-        perf = self.model_performance[model_name]
-        perf["total_calls"] += 1
-        if success:
-            perf["successful_calls"] += 1
-            perf["avg_time"] = (perf["avg_time"] * (perf["successful_calls"] - 1) + response_time) / perf["successful_calls"]
-            perf["avg_confidence"] = (perf["avg_confidence"] * (perf["successful_calls"] - 1) + confidence) / perf["successful_calls"]
-    
-    async def _select_fallback_model(self, failed_model: Dict) -> Dict:
-        """Select fallback model"""
-        for model in self.available_models:
-            if model["name"] != failed_model["name"]:
-                return model
-        return self.available_models[0] if self.available_models else failed_model
-    
-    def _get_fallback_strategy(self, strategy: ReasoningStrategy) -> ReasoningStrategy:
-        """Get fallback strategy"""
-        fallback_map = {
-            ReasoningStrategy.CREATIVE: ReasoningStrategy.ANALYTICAL,
-            ReasoningStrategy.ANALYTICAL: ReasoningStrategy.DIRECT,
-            ReasoningStrategy.DIRECT: ReasoningStrategy.CONSERVATIVE
-        }
-        return fallback_map.get(strategy, ReasoningStrategy.CONSERVATIVE)
+        # Adjust based on finish reason
+        if finish_reason == "stop":
+            confidence = base_confidence
+        elif finish_reason == "length":
+            confidence = base_confidence * 0.9  # Response was truncated
+        else:
+            confidence = base_confidence * 0.7
+        
+        # Boost if we have context
+        if has_context:
+            confidence = min(0.95, confidence + 0.1)
+        
+        # Adjust based on response length (very short might be less confident)
+        if response_length < 50:
+            confidence *= 0.9
+        
+        return round(confidence, 2)
 
 # =============================================================================
 # 🚀 RAG SYSTEM
 # =============================================================================
 
 class RAGSystem:
-    """Advanced RAG System orchestrator"""
+    """Advanced RAG System orchestrator with document management"""
     
     def __init__(self, config: RAGConfig):
         self.config = config
@@ -595,6 +685,7 @@ class RAGSystem:
         self.document_processor = DocumentProcessor(config)
         self.vector_store = VectorStoreManager(config)
         self.llm_manager = LLMManager(config)
+        self.metadata_manager = DocumentMetadataManager()
         
         # Statistics
         self.documents_indexed = 0
@@ -608,13 +699,19 @@ class RAGSystem:
     async def initialize(self) -> Dict[str, Any]:
         """Initialize all components"""
         try:
-            self.logger.info("🚀 Initializing RAG System...")
+            self.logger.info("🚀 Initializing RAG System (OpenAI-powered)...")
             
+            # Initialize vector store
             await self.vector_store.initialize()
+            
+            # Verify OpenAI client is ready
+            if not self.llm_manager.client:
+                raise Exception("OpenAI client not initialized")
+            
             self.initialized = True
             
-            self.logger.info("🎉 RAG System initialized")
-            return {"initialized": True, "status": "ready"}
+            self.logger.info("🎉 RAG System initialized successfully!")
+            return {"initialized": True, "status": "ready", "llm": "OpenAI GPT-4o-mini"}
             
         except Exception as e:
             self.logger.error(f"❌ Initialization failed: {str(e)}")
@@ -622,18 +719,27 @@ class RAGSystem:
             return {"initialized": False, "error": str(e)}
     
     async def process_document(self, file_path: Path, content: bytes) -> bool:
-        """Process document end-to-end"""
+        """Process document end-to-end with metadata tracking"""
         if not self.initialized:
             self.logger.error("RAG System not initialized")
             return False
         
+        # Generate unique document ID
+        doc_id = str(uuid.uuid4())
+        filename = file_path.name
+        file_type = file_path.suffix.lower()
+        file_size = len(content)
+        
         try:
-            self.logger.info(f"📋 Processing: {file_path.name}")
+            self.logger.info(f"📋 Processing document: {filename} (ID: {doc_id})")
             
             # Step 1: Extract and chunk
             chunks = await self.document_processor.process_file(str(file_path), content)
             if not chunks:
                 self.logger.error("No chunks created")
+                self.metadata_manager.add_document(
+                    doc_id, filename, file_type, file_size, 0, "failed"
+                )
                 return False
             
             self.logger.info(f"✅ Created {len(chunks)} chunks")
@@ -650,75 +756,172 @@ class RAGSystem:
             
             self.logger.info(f"✅ Generated {len(embeddings)} embeddings")
             
-            # Step 3: Index in vector store
-            result = await self.vector_store.index_chunks(chunks, embeddings)
+            # Step 3: Index in vector store with document ID
+            result = await self.vector_store.index_chunks(chunks, embeddings, doc_id)
             if not result.get("success"):
                 self.logger.error(f"Indexing failed: {result.get('error')}")
+                self.metadata_manager.add_document(
+                    doc_id, filename, file_type, file_size, len(chunks), "failed"
+                )
                 return False
+            
+            # Step 4: Store metadata
+            self.metadata_manager.add_document(
+                doc_id, filename, file_type, file_size, len(chunks), "indexed"
+            )
             
             # Update stats
             self.documents_indexed += 1
             self.total_chunks += len(chunks)
             
-            self.logger.info(f"🎉 Document processed! Total: {self.documents_indexed} docs, {self.total_chunks} chunks")
+            self.logger.info(f"🎉 Document processed successfully! Total: {self.documents_indexed} docs, {self.total_chunks} chunks")
             return True
             
         except Exception as e:
             self.logger.error(f"❌ Processing failed: {str(e)}\n{traceback.format_exc()}")
+            self.metadata_manager.add_document(
+                doc_id, filename, file_type, file_size, 0, "failed"
+            )
+            self.metadata_manager.update_status(doc_id, "failed", str(e))
             return False
     
     async def query(self, query_text: str, use_rag: bool = True) -> Dict[str, Any]:
-        """Query the RAG system"""
+        """Query the RAG system with OpenAI"""
         try:
             self.logger.info(f"🔍 Query: {query_text}")
             
             if not self.initialized or not use_rag:
                 return {
-                    "response": "RAG system not available. Please upload documents first.",
+                    "response": "RAG system not available. Please upload documents first and ensure OpenAI API key is configured.",
                     "sources": [],
                     "using_rag": False,
                     "context_found": 0
                 }
             
-            # Step 1: Search vector store
-            search_results = await self.vector_store.search(query_text, limit=self.config.max_context_chunks)
+            # Step 1: Search vector store for relevant context
+            search_results = await self.vector_store.search(
+                query_text, 
+                limit=self.config.max_context_chunks,
+                score_threshold=self.config.confidence_threshold
+            )
             
             if not search_results:
-                self.logger.warning("No relevant context found")
+                self.logger.warning("No relevant context found in knowledge base")
+                # Still generate response, but without context
+                llm_result = await self.llm_manager.generate_response(query_text, [])
+                
                 return {
-                    "response": "I don't have enough information in my knowledge base to answer that question.",
+                    "response": llm_result.get("response", "I don't have enough information to answer that question."),
                     "sources": [],
                     "using_rag": True,
-                    "context_found": 0
+                    "context_found": 0,
+                    "confidence": llm_result.get("confidence", 0.3)
                 }
             
-            self.logger.info(f"✅ Found {len(search_results)} relevant chunks")
+            self.logger.info(f"✅ Found {len(search_results)} relevant chunks (scores: {[r['score'] for r in search_results]})")
             
-            # Step 2: Generate response
+            # Step 2: Generate response using OpenAI with context
             context_texts = [r["text"] for r in search_results]
             sources = [r["source"] for r in search_results]
             
             llm_result = await self.llm_manager.generate_response(query_text, context_texts)
             
             if not llm_result.get("success"):
-                raise Exception(llm_result.get("error", "LLM generation failed"))
+                error_msg = llm_result.get("error", "Unknown error")
+                self.logger.error(f"LLM generation failed: {error_msg}")
+                return {
+                    "response": llm_result.get("response", "I encountered an error processing your request."),
+                    "sources": [],
+                    "using_rag": True,
+                    "context_found": len(search_results),
+                    "error": error_msg
+                }
             
             return {
                 "response": llm_result["response"],
                 "sources": list(set(sources)),
                 "using_rag": True,
                 "context_found": len(search_results),
-                "confidence": llm_result.get("confidence", 0.8)
+                "confidence": llm_result.get("confidence", 0.8),
+                "model_used": llm_result.get("model_used", "gpt-4o-mini")
             }
             
         except Exception as e:
             self.logger.error(f"❌ Query failed: {str(e)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return {
-                "response": f"Error processing query: {str(e)}",
+                "response": f"I encountered an error: {str(e)}. Please try again.",
                 "sources": [],
                 "using_rag": False,
-                "context_found": 0
+                "context_found": 0,
+                "error": str(e)
             }
+    
+    async def get_all_documents(self) -> List[Dict[str, Any]]:
+        """Get all indexed documents with metadata"""
+        documents = self.metadata_manager.get_all_documents()
+        return [
+            {
+                "doc_id": doc.doc_id,
+                "filename": doc.filename,
+                "file_type": doc.file_type,
+                "file_size": doc.file_size,
+                "upload_date": doc.upload_date.isoformat(),
+                "chunk_count": doc.chunk_count,
+                "status": doc.status,
+                "error_message": doc.error_message
+            }
+            for doc in documents
+        ]
+    
+    async def get_document_details(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Get details for a specific document"""
+        doc = self.metadata_manager.get_document(doc_id)
+        if not doc:
+            return None
+        
+        return {
+            "doc_id": doc.doc_id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "file_size": doc.file_size,
+            "upload_date": doc.upload_date.isoformat(),
+            "chunk_count": doc.chunk_count,
+            "status": doc.status,
+            "error_message": doc.error_message
+        }
+    
+    async def delete_document(self, doc_id: str) -> Dict[str, Any]:
+        """Delete a document and all its chunks"""
+        try:
+            # Check if document exists
+            doc = self.metadata_manager.get_document(doc_id)
+            if not doc:
+                return {"success": False, "error": "Document not found"}
+            
+            # Delete chunks from vector store
+            vector_deleted = await self.vector_store.delete_document_chunks(doc_id)
+            if not vector_deleted:
+                self.logger.warning(f"Failed to delete vector chunks for {doc_id}")
+            
+            # Delete metadata
+            metadata_deleted = self.metadata_manager.delete_document(doc_id)
+            
+            # Update stats
+            if metadata_deleted:
+                self.documents_indexed -= 1
+                self.total_chunks -= doc.chunk_count
+            
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "filename": doc.filename,
+                "chunks_deleted": doc.chunk_count
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to delete document {doc_id}: {str(e)}")
+            return {"success": False, "error": str(e)}
     
     async def get_system_status(self) -> Dict[str, Any]:
         """Get comprehensive system status"""
@@ -732,23 +935,20 @@ class RAGSystem:
             except:
                 pass
             
-            # Check Ollama
-            llm_available = False
-            try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    response = await client.get(f"{self.config.ollama_base_url}/api/tags")
-                    llm_available = response.status_code == 200
-            except:
-                pass
+            # Check OpenAI (simple check - client exists)
+            llm_available = self.llm_manager.client is not None
             
             return {
                 "initialized": self.initialized,
                 "vector_store_connected": vector_store_connected,
                 "llm_available": llm_available,
+                "llm_provider": "OpenAI",
+                "llm_model": self.config.openai_model,
                 "embedding_model_loaded": self.embedding_model is not None,
                 "documents_indexed": self.documents_indexed,
                 "total_chunks": self.total_chunks,
-                "collection_name": self.config.vector_collection_name
+                "collection_name": self.config.vector_collection_name,
+                "metadata_documents": len(self.metadata_manager.get_all_documents())
             }
             
         except Exception as e:

@@ -482,12 +482,12 @@
             <!-- Stats Grid -->
             <div class="stats-grid">
                 <div class="stat-card">
-                    <h3 id="total-conversations">0</h3>
-                    <p>TOTAL CONVERSATIONS</p>
+                    <h3 id="total-documents">0</h3>
+                    <p>TOTAL DOCUMENTS</p>
                 </div>
                 <div class="stat-card">
-                    <h3 id="active-connections">0</h3>
-                    <p>ACTIVE CONNECTIONS</p>
+                    <h3 id="total-chunks">0</h3>
+                    <p>TOTAL CHUNKS</p>
                 </div>
                 <div class="stat-card">
                     <h3 id="avg-response-time">161ms</h3>
@@ -511,7 +511,7 @@
                         </div>
                     </div>
                     <div class="status-item">
-                        <span>AI Processing</span>
+                        <span>AI Processing (OpenAI)</span>
                         <div class="status-indicator">
                             <span class="status-dot online" id="ai-status"></span>
                             <span id="ai-status-text">Healthy</span>
@@ -540,22 +540,22 @@
                         <div class="activity-item">
                             <div class="activity-icon">💬</div>
                             <div class="activity-content">
-                                <h4>New conversation started</h4>
-                                <p>2 minutes ago</p>
+                                <h4>System Ready</h4>
+                                <p>OpenAI-powered RAG system active</p>
                             </div>
                         </div>
                         <div class="activity-item">
                             <div class="activity-icon">💡</div>
                             <div class="activity-content">
                                 <h4>WebSocket connection established</h4>
-                                <p>5 minutes ago</p>
+                                <p>Real-time chat enabled</p>
                             </div>
                         </div>
                         <div class="activity-item">
                             <div class="activity-icon">✓</div>
                             <div class="activity-content">
                                 <h4>System health check passed</h4>
-                                <p>10 minutes ago</p>
+                                <p>All components operational</p>
                             </div>
                         </div>
                     </div>
@@ -747,6 +747,9 @@
                         statusEl.textContent = '✓ Uploaded';
                         statusEl.className = 'file-status success';
                         showAlert('success', `✓ ${file.name} uploaded successfully!`);
+                        
+                        // Refresh dashboard stats
+                        setTimeout(refreshData, 1000);
                     } else {
                         statusEl.textContent = '✗ Failed';
                         statusEl.className = 'file-status error';
@@ -761,33 +764,72 @@
             }
         }
 
-        // Load documents list
+        // Load documents list - FIXED JSON PATH
         async function loadDocuments() {
             const docsList = document.getElementById('documents-list');
             docsList.innerHTML = '<p style="text-align: center; color: #7f8c8d; padding: 40px;">Loading documents...</p>';
 
             try {
-                const response = await fetch(`${API_BASE}/api/rag/status`);
+                // FIXED: Using correct endpoint and JSON structure
+                const response = await fetch(`${API_BASE}/api/documents/list`);
                 const data = await response.json();
 
-                if (data.documents_indexed > 0) {
-                    docsList.innerHTML = `
-                        <div class="document-item">
+                if (data.documents && data.documents.length > 0) {
+                    docsList.innerHTML = '';
+                    
+                    data.documents.forEach(doc => {
+                        const docItem = document.createElement('div');
+                        docItem.className = 'document-item';
+                        docItem.innerHTML = `
                             <div class="document-info">
-                                <h4>Indexed Documents</h4>
+                                <h4>${doc.filename}</h4>
                                 <div class="document-meta">
-                                    <span>📊 ${data.documents_indexed} documents</span>
-                                    <span>📦 ${data.total_chunks} chunks</span>
+                                    <span>📊 ${doc.chunk_count} chunks</span>
+                                    <span>📦 ${(doc.file_size / 1024).toFixed(2)} KB</span>
+                                    <span>📅 ${new Date(doc.upload_date).toLocaleDateString()}</span>
+                                    <span>Status: ${doc.status}</span>
                                 </div>
                             </div>
-                        </div>
-                    `;
+                            <div class="document-actions">
+                                <button class="btn-small btn-delete" onclick="deleteDocument('${doc.doc_id}', '${doc.filename}')">
+                                    🗑️ Delete
+                                </button>
+                            </div>
+                        `;
+                        docsList.appendChild(docItem);
+                    });
                 } else {
                     docsList.innerHTML = '<p style="text-align: center; color: #7f8c8d; padding: 40px;">No documents uploaded yet. Go to Upload Documents to add your first document.</p>';
                 }
             } catch (error) {
                 docsList.innerHTML = '<p style="text-align: center; color: #e74c3c; padding: 40px;">Error loading documents</p>';
                 console.error('Error loading documents:', error);
+            }
+        }
+
+        // Delete document - CONNECTED TO BACKEND
+        async function deleteDocument(docId, filename) {
+            if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/documents/${docId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    showAlert('success', `✓ Successfully deleted "${filename}"`);
+                    loadDocuments(); // Refresh list
+                    refreshData(); // Update dashboard stats
+                } else {
+                    showAlert('error', `✗ Failed to delete "${filename}": ${result.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showAlert('error', `✗ Network error deleting "${filename}"`);
+                console.error('Delete error:', error);
             }
         }
 
@@ -824,29 +866,50 @@
             }, 5000);
         }
 
-        // Refresh dashboard data
+        // Refresh dashboard data - FIXED JSON PATH
         async function refreshData() {
             try {
-                const response = await fetch(`${API_BASE}/health`);
-                const data = await response.json();
+                // Get health status
+                const healthResponse = await fetch(`${API_BASE}/health`);
+                const healthData = await healthResponse.json();
 
-                // Update stats
-                if (data.components) {
-                    document.getElementById('ws-status-text').textContent = 
-                        data.components.websocket?.status === 'healthy' ? 'Online' : 'Offline';
-                    document.getElementById('ai-status-text').textContent = 
-                        data.components.rag_system?.status === 'healthy' ? 'Healthy' : 'Unhealthy';
-                    document.getElementById('vector-status-text').textContent = 
-                        data.components.vector_store?.status === 'healthy' ? 'Connected' : 'Disconnected';
-                    document.getElementById('llm-status-text').textContent = 
-                        data.components.llm_service?.status === 'healthy' ? 'Operational' : 'Down';
+                // Update component status
+                if (healthData.components) {
+                    // WebSocket status
+                    const wsHealthy = healthData.components.websocket?.status === 'healthy';
+                    document.getElementById('ws-status').className = `status-dot ${wsHealthy ? 'online' : 'offline'}`;
+                    document.getElementById('ws-status-text').textContent = wsHealthy ? 'Online' : 'Offline';
+
+                    // AI/LLM status
+                    const aiHealthy = healthData.components.llm_service?.status === 'healthy';
+                    document.getElementById('ai-status').className = `status-dot ${aiHealthy ? 'online' : 'offline'}`;
+                    document.getElementById('ai-status-text').textContent = aiHealthy ? 'Healthy' : 'Unhealthy';
+
+                    // Vector store status
+                    const vectorHealthy = healthData.components.vector_store?.status === 'healthy';
+                    document.getElementById('vector-status').className = `status-dot ${vectorHealthy ? 'online' : 'offline'}`;
+                    document.getElementById('vector-status-text').textContent = vectorHealthy ? 'Connected' : 'Disconnected';
+
+                    // LLM status
+                    const llmHealthy = healthData.components.llm_service?.status === 'healthy';
+                    document.getElementById('llm-status').className = `status-dot ${llmHealthy ? 'online' : 'offline'}`;
+                    document.getElementById('llm-status-text').textContent = llmHealthy ? 'Operational' : 'Down';
                 }
 
-                // Update conversation count
-                const statsResponse = await fetch(`${API_BASE}/api/rag/status`);
-                const statsData = await statsResponse.json();
+                // FIXED: Get document stats from RAG status endpoint
+                const ragResponse = await fetch(`${API_BASE}/api/rag/status`);
+                const ragData = await ragResponse.json();
                 
-                document.getElementById('total-conversations').textContent = statsData.documents_indexed || 0;
+                // Update document counts - FIXED JSON PATH
+                if (ragData.rag_system) {
+                    const docsIndexed = ragData.rag_system.documents_indexed || 0;
+                    const totalChunks = ragData.rag_system.total_chunks || 0;
+                    
+                    document.getElementById('total-documents').textContent = docsIndexed;
+                    document.getElementById('total-chunks').textContent = totalChunks;
+                }
+
+                console.log('Dashboard refreshed successfully');
             } catch (error) {
                 console.error('Error refreshing data:', error);
             }

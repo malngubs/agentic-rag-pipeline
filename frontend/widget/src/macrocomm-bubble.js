@@ -2,6 +2,7 @@
  * Macrocomm AI Assistant Widget
  * A production-ready chat widget implementing Macrocomm's brand guidelines
  * Motto: "SMART MADE SIMPLE"
+ * Version 2.1 - With improved response handling
  */
 
 class MacrocommBubble {
@@ -32,7 +33,7 @@ class MacrocommBubble {
             enableVoice: config.enableVoice || false,
             
             // Messages
-            welcomeMessage: config.welcomeMessage || "Hi! I'm your Macrocomm AI Assistant. How can I help you today?",
+            welcomeMessage: config.welcomeMessage || "Hi! I'm your Macrocomm AI Assistant powered by OpenAI. How can I help you today?",
             placeholder: config.placeholder || "Type your question here...",
             
             // Technical
@@ -683,18 +684,27 @@ class MacrocommBubble {
     }
     
     /**
-     * Handle WebSocket messages
+     * Handle WebSocket messages with improved response extraction
      */
     handleWebSocketMessage(data) {
+        console.log('📨 Received WebSocket message:', data);
+        
         switch (data.type) {
             case 'response':
                 this.hideTyping();
-                // FIX: Try multiple response fields (backend might send different field names)
-                const responseText = data.response || data.message || data.text || data.answer;
+                
+                // IMPROVED: Try multiple response fields with comprehensive fallback
+                // Backend sends both 'message' and 'response' for compatibility
+                const responseText = data.message || data.response || data.text || data.answer || 'No response received';
+                
+                console.log('💬 Extracted response text:', responseText);
+                
                 this.addMessage(responseText, 'assistant', {
                     intent: data.intent,
                     confidence: data.confidence,
-                    sources: data.sources
+                    sources: data.sources,
+                    using_rag: data.using_rag,
+                    context_found: data.context_found
                 });
                 break;
                 
@@ -714,6 +724,11 @@ class MacrocommBubble {
                 } else {
                     this.hideTyping();
                 }
+                break;
+                
+            case 'system':
+                // System messages (like connection welcome)
+                console.log('🔔 System message:', data.message);
                 break;
         }
     }
@@ -755,7 +770,7 @@ class MacrocommBubble {
         
         // Send via WebSocket
         this.ws.send(JSON.stringify({
-            type: 'chat',  // Make sure this is 'chat' not 'chat_message'
+            type: 'chat',
             message: message,
             conversation_id: this.state.currentConversationId || null,
             tenant: this.config.tenant
@@ -798,7 +813,7 @@ class MacrocommBubble {
     formatMessage(content) {
         // Basic formatting with null checks
         if (!content || typeof content !== 'string') {
-            return content || '';
+            return content || 'No response';
         }
         return content
             .replace(/\n/g, '<br>')
@@ -807,7 +822,7 @@ class MacrocommBubble {
     }
     
     /**
-     * Format sources
+     * Format sources with improved handling
      */
     formatSources(sources) {
         if (!sources || sources.length === 0) return '';
@@ -816,12 +831,21 @@ class MacrocommBubble {
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e5e5; font-size: 12px; color: #7C8082;">
                 <strong>Sources:</strong>
                 ${sources.map(source => {
-                    // FIX: Handle both string arrays and object arrays
-                    const sourceName = typeof source === 'string' ? source : (source.title || source.name || 'Document');
-                    return `<br>• ${sourceName}`;
+                    // Handle both string arrays and object arrays
+                    const sourceName = typeof source === 'string' ? source : (source.title || source.name || source.filename || 'Document');
+                    return `<br>• ${this.escapeHtml(sourceName)}`;
                 }).join('')}
             </div>
         `;
+    }
+    
+    /**
+     * Escape HTML to prevent XSS
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
     /**
@@ -952,7 +976,7 @@ class MacrocommBubble {
 
 // Global initialization function
 window.MacrocommBubble = function(config) {
-    return new MacrocommBubble(config);  // ← Added 'new'
+    return new MacrocommBubble(config);
 };
 
 // Auto-initialization if config is found

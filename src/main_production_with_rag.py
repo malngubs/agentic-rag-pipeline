@@ -2,6 +2,7 @@
 """
 Production FastAPI server with Real RAG capabilities
 Integrates document processing, vector search, and LLM generation
+Version 2.1 - With Document Management Endpoints
 """
 
 import asyncio
@@ -36,7 +37,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Pydantic models
+# =============================================================================
+# 📋 PYDANTIC MODELS
+# =============================================================================
+
 class ChatMessage(BaseModel):
     """Chat message model with fixed field naming"""
     model_config = ConfigDict(protected_namespaces=())
@@ -74,7 +78,34 @@ class UploadResponse(BaseModel):
     processed: bool
     chunks_created: Optional[int] = None
 
-# WebSocket Connection Manager
+class DocumentResponse(BaseModel):
+    """Document metadata response"""
+    doc_id: str
+    filename: str
+    file_type: str
+    file_size: int
+    upload_date: str
+    chunk_count: int
+    status: str
+    error_message: Optional[str] = None
+
+class DocumentListResponse(BaseModel):
+    """List of documents response"""
+    documents: List[DocumentResponse]
+    total: int
+
+class DeleteResponse(BaseModel):
+    """Document deletion response"""
+    success: bool
+    doc_id: Optional[str] = None
+    filename: Optional[str] = None
+    chunks_deleted: Optional[int] = None
+    error: Optional[str] = None
+
+# =============================================================================
+# 🔌 WEBSOCKET CONNECTION MANAGER
+# =============================================================================
+
 class ConnectionManager:
     """Manages WebSocket connections"""
     
@@ -104,7 +135,10 @@ class ConnectionManager:
             logger.error(f"Failed to send message: {e}")
             self.disconnect(websocket)
 
-# Application state with RAG system
+# =============================================================================
+# 🏗️ APPLICATION STATE
+# =============================================================================
+
 class ApplicationState:
     """Centralized application state with RAG capabilities"""
     
@@ -171,6 +205,10 @@ class ApplicationState:
 # Global application state
 app_state = ApplicationState()
 
+# =============================================================================
+# 🚀 FASTAPI APPLICATION
+# =============================================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
@@ -194,7 +232,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Macrocomm AI Assistant with RAG",
     description="Advanced Agentic RAG Pipeline with Real Document Processing",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan
 )
 
@@ -207,19 +245,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API Routes
+# =============================================================================
+# 📍 API ROUTES
+# =============================================================================
+
 @app.get("/", response_class=JSONResponse)
 async def root():
     """API root endpoint"""
     return {
         "service": "Macrocomm AI Assistant with RAG",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "online",
-        "capabilities": ["real_time_chat", "document_processing", "vector_search", "llm_generation"],
+        "llm_provider": "OpenAI",
+        "capabilities": ["real_time_chat", "document_processing", "vector_search", "llm_generation", "document_management"],
         "endpoints": {
             "health": "/health",
             "chat": "/api/chat",
             "upload": "/api/upload",
+            "documents_list": "/api/documents/list",
+            "document_details": "/api/documents/{doc_id}",
+            "document_delete": "/api/documents/{doc_id}",
             "rag_status": "/api/rag/status",
             "rag_debug": "/api/rag/debug",
             "test_processing": "/api/test-processing",
@@ -244,7 +289,7 @@ async def health_check():
         status="healthy" if status["startup_complete"] else "starting",
         timestamp=time.time(),
         service="agentic-rag-pipeline-with-rag",
-        version="2.0.0",
+        version="2.1.0",
         components={
             "rag_system": {
                 "status": "healthy" if status["rag_initialized"] else "degraded",
@@ -254,7 +299,8 @@ async def health_check():
                 "status": "healthy" if status["vector_store_available"] else "degraded"
             },
             "llm_service": {
-                "status": "healthy" if status["llm_available"] else "degraded"
+                "status": "healthy" if status["llm_available"] else "degraded",
+                "provider": "OpenAI"
             },
             "websocket": {
                 "status": "healthy",
@@ -284,208 +330,6 @@ async def rag_status():
             "details": str(e),
             "app_state_status": app_state.rag_status,
             "timestamp": time.time()
-        }
-
-@app.get("/api/rag/debug")
-async def rag_debug():
-    """
-    Comprehensive debugging endpoint to diagnose RAG system issues
-    """
-    debug_info = {
-        "timestamp": datetime.now().isoformat(),
-        "server_status": "running",
-        "rag_system_checks": {}
-    }
-    
-    try:
-        logger.info("🔍 Running comprehensive RAG system diagnostics...")
-        
-        # Check 1: Basic RAG system existence
-        debug_info["rag_system_checks"]["system_exists"] = hasattr(app_state, 'rag_system')
-        
-        if hasattr(app_state, 'rag_system'):
-            # Check 2: RAG system status
-            try:
-                status = await app_state.rag_system.get_system_status()
-                debug_info["rag_system_checks"]["detailed_status"] = status
-            except Exception as e:
-                debug_info["rag_system_checks"]["status_error"] = str(e)
-            
-            # Check 3: Individual components
-            debug_info["rag_system_checks"]["components"] = {}
-            
-            # Vector Store
-            try:
-                if hasattr(app_state.rag_system, 'vector_store') and app_state.rag_system.vector_store:
-                    debug_info["rag_system_checks"]["components"]["vector_store"] = {
-                        "exists": True,
-                        "client_exists": hasattr(app_state.rag_system.vector_store, 'client'),
-                        "host": getattr(app_state.rag_system.vector_store, 'host', 'unknown'),
-                        "port": getattr(app_state.rag_system.vector_store, 'port', 'unknown')
-                    }
-                else:
-                    debug_info["rag_system_checks"]["components"]["vector_store"] = {"exists": False}
-            except Exception as e:
-                debug_info["rag_system_checks"]["components"]["vector_store"] = {"error": str(e)}
-            
-            # LLM Manager
-            try:
-                if hasattr(app_state.rag_system, 'llm_manager') and app_state.rag_system.llm_manager:
-                    debug_info["rag_system_checks"]["components"]["llm_manager"] = {
-                        "exists": True,
-                        "base_url": getattr(app_state.rag_system.llm_manager, 'base_url', 'unknown'),
-                        "current_model": getattr(app_state.rag_system.llm_manager, 'current_model', None),
-                        "available_models": getattr(app_state.rag_system.llm_manager, 'available_models', [])
-                    }
-                else:
-                    debug_info["rag_system_checks"]["components"]["llm_manager"] = {"exists": False}
-            except Exception as e:
-                debug_info["rag_system_checks"]["components"]["llm_manager"] = {"error": str(e)}
-            
-            # Embedding Model
-            try:
-                debug_info["rag_system_checks"]["components"]["embedding_model"] = {
-                    "loaded": hasattr(app_state.rag_system, 'embedding_model') and 
-                             app_state.rag_system.embedding_model is not None
-                }
-            except Exception as e:
-                debug_info["rag_system_checks"]["components"]["embedding_model"] = {"error": str(e)}
-        
-        # Check 4: External services connectivity
-        debug_info["external_services"] = {}
-        
-        # Test Qdrant connection
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get("http://localhost:6333/collections")
-                debug_info["external_services"]["qdrant"] = {
-                    "accessible": response.status_code == 200,
-                    "status_code": response.status_code,
-                    "url": "http://localhost:6333"
-                }
-        except Exception as e:
-            debug_info["external_services"]["qdrant"] = {
-                "accessible": False,
-                "error": str(e),
-                "url": "http://localhost:6333"
-            }
-        
-        # Test Ollama connection
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get("http://localhost:11434/api/tags")
-                debug_info["external_services"]["ollama"] = {
-                    "accessible": response.status_code == 200,
-                    "status_code": response.status_code,
-                    "url": "http://localhost:11434"
-                }
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    debug_info["external_services"]["ollama"]["models"] = [
-                        model["name"] for model in data.get("models", [])
-                    ]
-        except Exception as e:
-            debug_info["external_services"]["ollama"] = {
-                "accessible": False,
-                "error": str(e),
-                "url": "http://localhost:11434"
-            }
-        
-        # Check 5: App state
-        debug_info["app_state"] = {
-            "startup_complete": getattr(app_state, 'startup_complete', False),
-            "rag_status": getattr(app_state, 'rag_status', {}),
-            "conversations_count": len(getattr(app_state, 'conversations', {}))
-        }
-        
-        logger.info("✅ RAG system diagnostics completed")
-        return debug_info
-        
-    except Exception as e:
-        logger.error(f"❌ Debug endpoint failed: {str(e)}")
-        debug_info["debug_error"] = str(e)
-        return debug_info
-
-@app.post("/api/test-processing")
-async def test_document_processing():
-    """
-    Test document processing with a simple text sample
-    """
-    logger.info("🧪 Testing document processing pipeline...")
-    
-    try:
-        # Create test content
-        test_content = """
-        This is a test document for the RAG system.
-        
-        The Advanced Agentic RAG Pipeline implements human-like thought processes
-        for intelligent document processing and retrieval.
-        
-        Key features include:
-        - Comprehensive document processing (PDF, DOCX, TXT, Excel)
-        - Intelligent chunking strategies
-        - Vector-based similarity search
-        - LLM-powered response generation
-        - Enhanced error handling and debugging
-        
-        This system demonstrates how AI can process documents,
-        understand context, and provide relevant responses to user queries.
-        """
-        
-        test_filename = "test_document.txt"
-        test_file_path = Path(test_filename)
-        test_content_bytes = test_content.encode('utf-8')
-        
-        logger.info(f"📝 Created test document: {len(test_content_bytes)} bytes")
-        
-        # Test the processing pipeline
-        if app_state.rag_status.get('initialized', False):
-            logger.info("🔄 Testing RAG processing pipeline...")
-            
-            result = await app_state.rag_system.process_document(test_file_path, test_content_bytes)
-            
-            if result:
-                logger.info("✅ Test processing successful!")
-                
-                # Test query
-                logger.info("🔍 Testing query processing...")
-                query_result = await app_state.rag_system.query("What are the key features?")
-                
-                return {
-                    "test_status": "success",
-                    "processing_result": result,
-                    "query_test": {
-                        "query": "What are the key features?",
-                        "response": query_result.get("response", "No response"),
-                        "using_rag": query_result.get("using_rag", False),
-                        "context_found": query_result.get("context_found", 0)
-                    },
-                    "timestamp": datetime.now().isoformat()
-                }
-            else:
-                logger.error("❌ Test processing failed")
-                return {
-                    "test_status": "failed",
-                    "error": "Processing returned False",
-                    "timestamp": datetime.now().isoformat()
-                }
-        else:
-            logger.warning("⚠️ RAG system not initialized for testing")
-            return {
-                "test_status": "skipped",
-                "reason": "RAG system not initialized",
-                "rag_status": app_state.rag_status,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-    except Exception as e:
-        logger.error(f"❌ Test processing failed: {str(e)}")
-        return {
-            "test_status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "timestamp": datetime.now().isoformat()
         }
 
 @app.post("/api/upload", response_model=UploadResponse)
@@ -566,7 +410,7 @@ async def upload_document(file: UploadFile = File(...)):
                 if not detailed_status.get('vector_store_connected', False):
                     logger.error("❌ Vector store (Qdrant) not connected - is Qdrant running on localhost:6333?")
                 if not detailed_status.get('llm_available', False):
-                    logger.error("❌ LLM not available - is Ollama running on localhost:11434?")
+                    logger.error("❌ LLM (OpenAI) not available - check OPENAI_API_KEY environment variable")
                 if not detailed_status.get('embedding_model_loaded', False):
                     logger.error("❌ Embedding model not loaded - check model installation")
                     
@@ -576,7 +420,7 @@ async def upload_document(file: UploadFile = File(...)):
             # Return response indicating RAG unavailable but file stored
             return UploadResponse(
                 message=f"Document '{file.filename}' uploaded but NOT processed for RAG. "
-                       f"RAG system unavailable - check Qdrant (localhost:6333) and Ollama (localhost:11434) services.",
+                       f"RAG system unavailable - check Qdrant (localhost:6333) and OpenAI API key.",
                 filename=file.filename,
                 size=file_size,
                 processed=False,
@@ -608,12 +452,6 @@ async def upload_document(file: UploadFile = File(...)):
                     status = await app_state.rag_system.get_system_status()
                     chunks_created = status.get('total_chunks', 0)
                     logger.info(f"📊 Total chunks in system: {chunks_created}")
-                    
-                    # Estimate chunks from this document (rough calculation)
-                    # This is a simplified estimate - you could enhance this
-                    if hasattr(content, '__len__'):
-                        estimated_chunks = max(1, len(content) // 2000)  # Rough estimate
-                        logger.info(f"📄 Estimated chunks from this document: ~{estimated_chunks}")
                     
                 except Exception as e:
                     logger.warning(f"⚠️ Could not get updated chunk count: {str(e)}")
@@ -668,6 +506,93 @@ async def upload_document(file: UploadFile = File(...)):
             status_code=500, 
             detail=f"Document upload failed: {error_msg}"
         )
+
+# =============================================================================
+# 📄 DOCUMENT MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.get("/api/documents/list", response_model=DocumentListResponse)
+async def list_documents():
+    """
+    Get list of all indexed documents with metadata
+    """
+    try:
+        logger.info("📋 Fetching document list...")
+        
+        documents = await app_state.rag_system.get_all_documents()
+        
+        document_responses = [
+            DocumentResponse(**doc) for doc in documents
+        ]
+        
+        logger.info(f"✅ Retrieved {len(document_responses)} documents")
+        
+        return DocumentListResponse(
+            documents=document_responses,
+            total=len(document_responses)
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to list documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve documents: {str(e)}")
+
+@app.get("/api/documents/{doc_id}", response_model=DocumentResponse)
+async def get_document_details(doc_id: str):
+    """
+    Get detailed information about a specific document
+    """
+    try:
+        logger.info(f"📄 Fetching details for document: {doc_id}")
+        
+        doc_details = await app_state.rag_system.get_document_details(doc_id)
+        
+        if not doc_details:
+            logger.warning(f"Document not found: {doc_id}")
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        logger.info(f"✅ Retrieved details for: {doc_details['filename']}")
+        
+        return DocumentResponse(**doc_details)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get document details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve document: {str(e)}")
+
+@app.delete("/api/documents/{doc_id}", response_model=DeleteResponse)
+async def delete_document(doc_id: str):
+    """
+    Delete a document and all its associated chunks from the vector store
+    """
+    try:
+        logger.info(f"🗑️ Deleting document: {doc_id}")
+        
+        result = await app_state.rag_system.delete_document(doc_id)
+        
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            logger.error(f"Failed to delete document: {error_msg}")
+            raise HTTPException(status_code=404 if "not found" in error_msg.lower() else 500, detail=error_msg)
+        
+        logger.info(f"✅ Successfully deleted document: {result.get('filename')}")
+        
+        return DeleteResponse(
+            success=True,
+            doc_id=result.get("doc_id"),
+            filename=result.get("filename"),
+            chunks_deleted=result.get("chunks_deleted")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+# =============================================================================
+# 💬 CHAT ENDPOINTS
+# =============================================================================
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(message: ChatMessage):
@@ -730,18 +655,21 @@ async def generate_demo_response(user_message: str) -> str:
     message_lower = user_message.lower()
     
     if any(word in message_lower for word in ["hello", "hi", "hey"]):
-        return "👋 Hello! I'm the Macrocomm AI Assistant with RAG capabilities. Upload documents to enable intelligent document-based responses."
+        return "👋 Hello! I'm the Macrocomm AI Assistant powered by OpenAI. Upload documents to enable intelligent document-based responses."
     
     elif any(word in message_lower for word in ["document", "upload", "file"]):
-        return "📄 You can upload PDF, DOCX, TXT, or Excel files. Once uploaded, I'll be able to answer questions based on your documents. The RAG system needs Ollama and Qdrant to be running."
+        return "📄 You can upload PDF, DOCX, TXT, or Excel files. Once uploaded, I'll be able to answer questions based on your documents using OpenAI's GPT-4o-mini."
     
     elif any(word in message_lower for word in ["rag", "system", "status"]):
-        return "🔧 RAG system status: Check /api/rag/status for detailed information. Make sure Ollama (http://localhost:11434) and Qdrant (localhost:6333) are running."
+        return "🔧 RAG system status: Check /api/rag/status for detailed information. Make sure Qdrant (http://localhost:6333) is running and OpenAI API key is configured."
     
     else:
-        return f"🤖 I received your message: '{user_message}'. For document-based responses, please upload documents and ensure the RAG system is running (Ollama + Qdrant)."
+        return f"🤖 I received your message: '{user_message}'. For document-based responses, please upload documents and ensure the RAG system is running (Qdrant + OpenAI)."
 
-# WebSocket endpoint with RAG integration
+# =============================================================================
+# 🔌 WEBSOCKET ENDPOINT
+# =============================================================================
+
 @app.websocket("/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint with RAG capabilities"""
@@ -756,7 +684,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # Send welcome message with RAG status
         rag_available = app_state.rag_status.get('initialized', False)
         welcome_msg = "WebSocket connected! Real-time chat is active." + (
-            " RAG system ready for document-based queries." if rag_available 
+            " RAG system ready for document-based queries (powered by OpenAI)." if rag_available 
             else " RAG system not available - using demo responses."
         )
         
@@ -792,10 +720,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                     response_time = time.time() - start_time
                     
-                    # Send response
+                    # Send response - FIXED: Using consistent field name 'message'
                     await websocket.send_json({
                         "type": "response",
-                        "message": response_text,
+                        "message": response_text,  # ← KEY FIX: Using 'message' field
+                        "response": response_text,  # ← Also include 'response' for backwards compatibility
                         "conversation_id": conversation_id,
                         "response_time": response_time,
                         "timestamp": time.time(),
@@ -822,7 +751,201 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         app_state.connection_manager.disconnect(websocket)
 
-# Static file serving
+# =============================================================================
+# 🧪 DEBUG AND TESTING ENDPOINTS
+# =============================================================================
+
+@app.get("/api/rag/debug")
+async def rag_debug():
+    """
+    Comprehensive debugging endpoint to diagnose RAG system issues
+    """
+    debug_info = {
+        "timestamp": datetime.now().isoformat(),
+        "server_status": "running",
+        "rag_system_checks": {}
+    }
+    
+    try:
+        logger.info("🔍 Running comprehensive RAG system diagnostics...")
+        
+        # Check 1: Basic RAG system existence
+        debug_info["rag_system_checks"]["system_exists"] = hasattr(app_state, 'rag_system')
+        
+        if hasattr(app_state, 'rag_system'):
+            # Check 2: RAG system status
+            try:
+                status = await app_state.rag_system.get_system_status()
+                debug_info["rag_system_checks"]["detailed_status"] = status
+            except Exception as e:
+                debug_info["rag_system_checks"]["status_error"] = str(e)
+            
+            # Check 3: Individual components
+            debug_info["rag_system_checks"]["components"] = {}
+            
+            # Vector Store
+            try:
+                if hasattr(app_state.rag_system, 'vector_store') and app_state.rag_system.vector_store:
+                    debug_info["rag_system_checks"]["components"]["vector_store"] = {
+                        "exists": True,
+                        "client_exists": hasattr(app_state.rag_system.vector_store, 'client'),
+                        "host": getattr(app_state.rag_system.vector_store, 'host', 'unknown'),
+                        "port": getattr(app_state.rag_system.vector_store, 'port', 'unknown')
+                    }
+                else:
+                    debug_info["rag_system_checks"]["components"]["vector_store"] = {"exists": False}
+            except Exception as e:
+                debug_info["rag_system_checks"]["components"]["vector_store"] = {"error": str(e)}
+            
+            # LLM Manager
+            try:
+                if hasattr(app_state.rag_system, 'llm_manager') and app_state.rag_system.llm_manager:
+                    debug_info["rag_system_checks"]["components"]["llm_manager"] = {
+                        "exists": True,
+                        "provider": "OpenAI",
+                        "model": app_state.rag_system.llm_manager.current_model,
+                        "client_exists": app_state.rag_system.llm_manager.client is not None
+                    }
+                else:
+                    debug_info["rag_system_checks"]["components"]["llm_manager"] = {"exists": False}
+            except Exception as e:
+                debug_info["rag_system_checks"]["components"]["llm_manager"] = {"error": str(e)}
+            
+            # Embedding Model
+            try:
+                debug_info["rag_system_checks"]["components"]["embedding_model"] = {
+                    "loaded": hasattr(app_state.rag_system, 'embedding_model') and 
+                             app_state.rag_system.embedding_model is not None
+                }
+            except Exception as e:
+                debug_info["rag_system_checks"]["components"]["embedding_model"] = {"error": str(e)}
+        
+        # Check 4: External services connectivity
+        debug_info["external_services"] = {}
+        
+        # Test Qdrant connection
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("http://localhost:6333/collections")
+                debug_info["external_services"]["qdrant"] = {
+                    "accessible": response.status_code == 200,
+                    "status_code": response.status_code,
+                    "url": "http://localhost:6333"
+                }
+        except Exception as e:
+            debug_info["external_services"]["qdrant"] = {
+                "accessible": False,
+                "error": str(e),
+                "url": "http://localhost:6333"
+            }
+        
+        # Check OpenAI API key presence
+        debug_info["external_services"]["openai"] = {
+            "api_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+            "provider": "OpenAI GPT-4o-mini"
+        }
+        
+        # Check 5: App state
+        debug_info["app_state"] = {
+            "startup_complete": getattr(app_state, 'startup_complete', False),
+            "rag_status": getattr(app_state, 'rag_status', {}),
+            "conversations_count": len(getattr(app_state, 'conversations', {}))
+        }
+        
+        logger.info("✅ RAG system diagnostics completed")
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"❌ Debug endpoint failed: {str(e)}")
+        debug_info["debug_error"] = str(e)
+        return debug_info
+
+@app.post("/api/test-processing")
+async def test_document_processing():
+    """
+    Test document processing with a simple text sample
+    """
+    logger.info("🧪 Testing document processing pipeline...")
+    
+    try:
+        # Create test content
+        test_content = """
+        This is a test document for the RAG system.
+        
+        The Advanced Agentic RAG Pipeline implements human-like thought processes
+        for intelligent document processing and retrieval.
+        
+        Key features include:
+        - Comprehensive document processing (PDF, DOCX, TXT, Excel)
+        - Intelligent chunking strategies
+        - Vector-based similarity search
+        - OpenAI GPT-4o-mini powered response generation
+        - Enhanced error handling and debugging
+        - Document metadata management
+        
+        This system demonstrates how AI can process documents,
+        understand context, and provide relevant responses to user queries.
+        """
+        
+        test_filename = "test_document.txt"
+        test_file_path = Path(test_filename)
+        test_content_bytes = test_content.encode('utf-8')
+        
+        logger.info(f"📝 Created test document: {len(test_content_bytes)} bytes")
+        
+        # Test the processing pipeline
+        if app_state.rag_status.get('initialized', False):
+            logger.info("🔄 Testing RAG processing pipeline...")
+            
+            result = await app_state.rag_system.process_document(test_file_path, test_content_bytes)
+            
+            if result:
+                logger.info("✅ Test processing successful!")
+                
+                # Test query
+                logger.info("🔍 Testing query processing...")
+                query_result = await app_state.rag_system.query("What are the key features?")
+                
+                return {
+                    "test_status": "success",
+                    "processing_result": result,
+                    "query_test": {
+                        "query": "What are the key features?",
+                        "response": query_result.get("response", "No response"),
+                        "using_rag": query_result.get("using_rag", False),
+                        "context_found": query_result.get("context_found", 0)
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                logger.error("❌ Test processing failed")
+                return {
+                    "test_status": "failed",
+                    "error": "Processing returned False",
+                    "timestamp": datetime.now().isoformat()
+                }
+        else:
+            logger.warning("⚠️ RAG system not initialized for testing")
+            return {
+                "test_status": "skipped",
+                "reason": "RAG system not initialized",
+                "rag_status": app_state.rag_status,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Test processing failed: {str(e)}")
+        return {
+            "test_status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now().isoformat()
+        }
+
+# =============================================================================
+# 📁 STATIC FILE SERVING
+# =============================================================================
+
 def setup_static_files():
     """Setup static file serving"""
     try:
@@ -854,9 +977,12 @@ def setup_static_files():
 # Setup static files
 setup_static_files()
 
-# Development server
+# =============================================================================
+# 🚀 DEVELOPMENT SERVER
+# =============================================================================
+
 if __name__ == "__main__":
-    logger.info("🚀 Starting RAG-enabled development server...")
+    logger.info("🚀 Starting RAG-enabled development server with OpenAI...")
     uvicorn.run(
         "main_production_with_rag:app",
         host="127.0.0.1",
@@ -866,24 +992,3 @@ if __name__ == "__main__":
         log_level="info",
         reload_dirs=["../"]
     )
-
-@app.post("/api/rag/clear-test-data")
-async def clear_test_data():
-    """Remove test documents from vector store"""
-    try:
-        success = await app_state.rag_system.vector_store.clear_test_documents()
-        if success:
-            return {"message": "Test documents cleared", "success": True}
-        else:
-            return {"message": "Failed to clear test documents", "success": False}
-    except Exception as e:
-        return {"message": f"Error: {str(e)}", "success": False}
-
-@app.post("/api/rag/force-clear-test-data")
-async def force_clear_test_data():
-    """Force remove ALL test documents"""
-    try:
-        success = await app_state.rag_system.vector_store.force_clear_test_documents()
-        return {"message": "Force cleanup completed", "success": success}
-    except Exception as e:
-        return {"message": f"Error: {str(e)}", "success": False}
