@@ -795,7 +795,8 @@ class RAGSystem:
                     "response": "RAG system not available. Please upload documents first and ensure OpenAI API key is configured.",
                     "sources": [],
                     "using_rag": False,
-                    "context_found": 0
+                    "context_found": 0,
+                    "search_results": []  # ← ADD THIS
                 }
             
             # Step 1: Search vector store for relevant context
@@ -815,7 +816,8 @@ class RAGSystem:
                     "sources": [],
                     "using_rag": True,
                     "context_found": 0,
-                    "confidence": llm_result.get("confidence", 0.3)
+                    "confidence": llm_result.get("confidence", 0.3),
+                    "search_results": []  # ← ADD THIS
                 }
             
             self.logger.info(f"✅ Found {len(search_results)} relevant chunks (scores: {[r['score'] for r in search_results]})")
@@ -834,7 +836,8 @@ class RAGSystem:
                     "sources": [],
                     "using_rag": True,
                     "context_found": len(search_results),
-                    "error": error_msg
+                    "error": error_msg,
+                    "search_results": []  # ← ADD THIS
                 }
             
             return {
@@ -843,7 +846,8 @@ class RAGSystem:
                 "using_rag": True,
                 "context_found": len(search_results),
                 "confidence": llm_result.get("confidence", 0.8),
-                "model_used": llm_result.get("model_used", "gpt-4o-mini")
+                "model_used": llm_result.get("model_used", "gpt-4o-mini"),
+                "search_results": search_results  # ← ADD THIS
             }
             
         except Exception as e:
@@ -854,7 +858,8 @@ class RAGSystem:
                 "sources": [],
                 "using_rag": False,
                 "context_found": 0,
-                "error": str(e)
+                "error": str(e),
+                "search_results": []  # ← ADD THIS
             }
     
     async def get_all_documents(self) -> List[Dict[str, Any]]:
