@@ -27,6 +27,14 @@ from pydantic import BaseModel, Field, ConfigDict
 # Import our RAG system
 from rag_components import RAGSystem, RAGConfig
 
+# ✨ PHASE 5 IMPORTS - Configuration & Advanced Features
+try:
+    from config_manager import ConfigurationManager, set_config_manager, get_config_manager
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    logging.warning("⚠️ config_manager.py not found - configuration features disabled")
+
 # ✨ PHASE 1 IMPORTS - New functionality
 try:
     from analytics_database import AnalyticsDatabase
@@ -204,7 +212,28 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Citation builder initialization failed: {e}")
                 self.citation_builder = None
-        
+
+        # ✨ PHASE 5: Configuration manager
+        self.config_manager = None
+        if CONFIG_AVAILABLE:
+            try:
+                self.config_manager = ConfigurationManager(config_path="data/system_config.json")
+                set_config_manager(self.config_manager)  # Set global instance
+                logger.info("✅ Configuration manager initialized: data/system_config.json")
+
+                # Update RAG config with saved settings
+                saved_config = self.config_manager.get_config()
+                if saved_config.get('llm_model'):
+                    config.openai_model = saved_config['llm_model']
+                    logger.info(f"✅ LLM model set to: {config.openai_model}")
+                if saved_config.get('temperature'):
+                    config.temperature = saved_config['temperature']
+                if saved_config.get('max_tokens'):
+                    config.max_tokens = saved_config['max_tokens']
+            except Exception as e:
+                logger.error(f"❌ Configuration manager initialization failed: {e}")
+                self.config_manager = None
+
         self.startup_complete = False
     
     async def initialize_components(self):
@@ -1296,6 +1325,170 @@ async def export_analytics(format: str = "json"):
     except Exception as e:
         logger.error(f"Failed to export analytics: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export data: {str(e)}")
+
+# =============================================================================
+# ✨ PHASE 5: CONFIGURATION API ENDPOINTS
+# =============================================================================
+
+@app.get("/api/config")
+async def get_configuration():
+    """Get current system configuration"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        config = app_state.config_manager.get_config()
+        return JSONResponse(content=config)
+    except Exception as e:
+        logger.error(f"Failed to get configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config")
+async def update_configuration(updates: Dict[str, Any]):
+    """Update system configuration"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        # Update configuration
+        updated_config = app_state.config_manager.update_config(updates)
+
+        # If LLM model was updated, update the RAG system
+        if 'llm_model' in updates:
+            app_state.rag_system.config.openai_model = updates['llm_model']
+            logger.info(f"✅ Updated RAG system LLM model to: {updates['llm_model']}")
+
+        # If temperature or max_tokens were updated, update RAG system
+        if 'temperature' in updates:
+            app_state.rag_system.config.temperature = updates['temperature']
+        if 'max_tokens' in updates:
+            app_state.rag_system.config.max_tokens = updates['max_tokens']
+
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/models")
+async def get_available_models():
+    """Get list of available LLM models"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        models = app_state.config_manager.get_available_models()
+        current_model = app_state.config_manager.get_current_model()
+        return JSONResponse(content={
+            "models": models,
+            "current_model": current_model
+        })
+    except Exception as e:
+        logger.error(f"Failed to get available models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/model")
+async def set_llm_model(model_data: Dict[str, str]):
+    """Set LLM model"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    model_id = model_data.get('model_id')
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+
+    try:
+        updated_config = app_state.config_manager.set_model(model_id)
+
+        # Update RAG system
+        app_state.rag_system.config.openai_model = model_id
+        logger.info(f"✅ Updated LLM model to: {model_id}")
+
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/confidence-threshold")
+async def set_confidence_threshold(threshold_data: Dict[str, float]):
+    """Set confidence threshold"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    threshold = threshold_data.get('threshold')
+    if threshold is None:
+        raise HTTPException(status_code=400, detail="threshold is required")
+
+    try:
+        updated_config = app_state.config_manager.set_confidence_threshold(threshold)
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set confidence threshold: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/prompt-template")
+async def get_prompt_template():
+    """Get system prompt template"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        template = app_state.config_manager.get_prompt_template()
+        return JSONResponse(content={"template": template})
+    except Exception as e:
+        logger.error(f"Failed to get prompt template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/prompt-template")
+async def set_prompt_template(template_data: Dict[str, str]):
+    """Set system prompt template"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    template = template_data.get('template')
+    if not template:
+        raise HTTPException(status_code=400, detail="template is required")
+
+    try:
+        updated_config = app_state.config_manager.set_prompt_template(template)
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set prompt template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/reset")
+async def reset_configuration():
+    """Reset configuration to defaults"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        updated_config = app_state.config_manager.reset_to_defaults()
+
+        # Update RAG system with defaults
+        app_state.rag_system.config.openai_model = updated_config['llm_model']
+        app_state.rag_system.config.temperature = updated_config['temperature']
+        app_state.rag_system.config.max_tokens = updated_config['max_tokens']
+
+        logger.info("✅ Configuration reset to defaults")
+        return JSONResponse(content=updated_config)
+    except Exception as e:
+        logger.error(f"Failed to reset configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER

@@ -741,9 +741,99 @@
         <div id="configuration-content" class="content-section">
             <div class="header">
                 <h1>Configuration</h1>
+                <button class="button" onclick="loadConfiguration()">🔄 Refresh</button>
             </div>
-            
+
+            <!-- Phase 5: LLM Model Selector -->
             <div class="status-card">
+                <h3>🤖 LLM Model Selection</h3>
+                <p style="margin-bottom: 20px; color: #666;">Choose the AI model that powers your assistant</p>
+
+                <div id="model-selector-container">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading available models...</p>
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #3498db;">
+                    <strong>💡 Model Selection Tips:</strong>
+                    <ul style="margin: 10px 0 0 20px; color: #666;">
+                        <li><strong>GPT-4 Optimized:</strong> Best for complex reasoning, highest accuracy</li>
+                        <li><strong>GPT-4 Optimized Mini:</strong> Balanced performance and cost (recommended)</li>
+                        <li><strong>GPT-3.5 Turbo:</strong> Fast and economical for simple queries</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Phase 5: Confidence Threshold Tuning -->
+            <div class="status-card" style="margin-top: 20px;">
+                <h3>🎯 Confidence Threshold</h3>
+                <p style="margin-bottom: 20px; color: #666;">Adjust how confident the AI must be to use RAG documents</p>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <strong>Threshold:</strong>
+                        <span id="confidence-threshold-value" style="color: #3498db; font-weight: 600;">0.5</span>
+                    </label>
+                    <input
+                        type="range"
+                        id="confidence-threshold-slider"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value="0.5"
+                        style="width: 100%; height: 8px; border-radius: 5px; background: linear-gradient(to right, #e74c3c, #f39c12, #27ae60); outline: none; -webkit-appearance: none; appearance: none;"
+                        oninput="updateConfidenceThresholdDisplay(this.value)"
+                        onchange="saveConfidenceThreshold(this.value)"
+                    >
+                    <div style="display: flex; justify-content: space-between; margin-top: 5px; color: #999; font-size: 0.85em;">
+                        <span>0.0 (Low)</span>
+                        <span>0.5 (Medium)</span>
+                        <span>1.0 (High)</span>
+                    </div>
+                </div>
+
+                <div style="padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #f39c12;">
+                    <strong>💡 Threshold Guide:</strong>
+                    <ul style="margin: 10px 0 0 20px; color: #666;">
+                        <li><strong>Low (0.0-0.3):</strong> AI uses documents liberally, more creative responses</li>
+                        <li><strong>Medium (0.4-0.6):</strong> Balanced between accuracy and coverage (recommended)</li>
+                        <li><strong>High (0.7-1.0):</strong> AI only uses documents when very confident</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Phase 5: Prompt Template Editor -->
+            <div class="status-card" style="margin-top: 20px;">
+                <h3>📝 System Prompt Template</h3>
+                <p style="margin-bottom: 20px; color: #666;">Customize the AI's behavior and response style</p>
+
+                <div style="margin-bottom: 15px;">
+                    <textarea
+                        id="prompt-template-editor"
+                        style="width: 100%; padding: 15px; border: 1px solid #ddd; border-radius: 8px; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 0.9em; min-height: 250px; line-height: 1.5;"
+                        placeholder="Loading template..."
+                    ></textarea>
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button class="button" onclick="savePromptTemplate()">💾 Save Template</button>
+                    <button class="button-secondary button" onclick="resetPromptTemplate()">🔄 Reset to Default</button>
+                </div>
+
+                <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #9b59b6;">
+                    <strong>💡 Template Variables:</strong>
+                    <ul style="margin: 10px 0 0 20px; color: #666;">
+                        <li>The system prompt defines the AI's personality and capabilities</li>
+                        <li>Be clear and specific about what you want the AI to do</li>
+                        <li>Changes take effect immediately for new conversations</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Widget Configuration -->
+            <div class="status-card" style="margin-top: 20px;">
                 <h3>Widget Configuration</h3>
                 <p style="margin-bottom: 20px;">Customize the chat widget for your organization</p>
                 
@@ -820,6 +910,8 @@
                 loadConversations();
             } else if (section === 'analytics') {
                 loadAnalytics();
+            } else if (section === 'configuration') {
+                loadConfiguration();
             } else if (section === 'system') {
                 loadSystemDetails();
             }
@@ -1090,12 +1182,197 @@
             const alert = document.createElement('div');
             alert.className = `alert ${type}`;
             alert.textContent = message;
-            
+
             uploadStatus.appendChild(alert);
 
             setTimeout(() => {
                 alert.remove();
             }, 5000);
+        }
+
+        // ===== PHASE 5: CONFIGURATION FUNCTIONS =====
+
+        // Load complete configuration
+        async function loadConfiguration() {
+            await loadAvailableModels();
+            await loadCurrentConfig();
+        }
+
+        // Load available LLM models
+        async function loadAvailableModels() {
+            const container = document.getElementById('model-selector-container');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/config/models`);
+                if (!response.ok) {
+                    throw new Error('Failed to load models');
+                }
+
+                const data = await response.json();
+                const models = data.models;
+                const currentModel = data.current_model;
+
+                container.innerHTML = `
+                    <div style="display: grid; gap: 15px;">
+                        ${models.map(model => `
+                            <div class="model-card ${model.id === currentModel ? 'selected' : ''}" onclick="selectModel('${model.id}')" style="
+                                padding: 20px;
+                                border: 2px solid ${model.id === currentModel ? '#3498db' : '#ddd'};
+                                border-radius: 12px;
+                                cursor: pointer;
+                                transition: all 0.3s;
+                                background: ${model.id === currentModel ? '#f0f8ff' : 'white'};
+                            ">
+                                <div style="display: flex; justify-content: space-between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <h4 style="margin: 0 0 8px 0; color: #2c3e50;">
+                                            ${model.id === currentModel ? '✓ ' : ''}${model.name}
+                                            ${model.recommended ? '<span style="background: #27ae60; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; margin-left: 8px;">RECOMMENDED</span>' : ''}
+                                        </h4>
+                                        <p style="margin: 0 0 10px 0; color: #666; font-size: 0.9em;">${model.description}</p>
+                                        <div style="display: flex; gap: 15px; font-size: 0.85em; color: #999;">
+                                            <span>📊 ${model.context_length.toLocaleString()} tokens</span>
+                                            <span>💰 $${model.cost_per_1k_tokens}/1K tokens</span>
+                                        </div>
+                                    </div>
+                                    ${model.id === currentModel ? '<div style="color: #3498db; font-size: 1.5em;">✓</div>' : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+
+            } catch (error) {
+                container.innerHTML = '<p style="text-align: center; color: #e74c3c; padding: 40px;">Failed to load models</p>';
+                console.error('Failed to load models:', error);
+            }
+        }
+
+        // Select LLM model
+        async function selectModel(modelId) {
+            try {
+                const response = await fetch(`${API_BASE}/api/config/model`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_id: modelId })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update model');
+                }
+
+                showAlert('success', '✓ LLM model updated successfully!');
+                await loadAvailableModels();  // Refresh to show selection
+
+            } catch (error) {
+                showAlert('error', '✗ Failed to update model');
+                console.error('Failed to update model:', error);
+            }
+        }
+
+        // Load current configuration
+        async function loadCurrentConfig() {
+            try {
+                const response = await fetch(`${API_BASE}/api/config`);
+                if (!response.ok) {
+                    throw new Error('Failed to load configuration');
+                }
+
+                const config = await response.json();
+
+                // Update confidence threshold
+                if (config.confidence_threshold !== undefined) {
+                    const slider = document.getElementById('confidence-threshold-slider');
+                    slider.value = config.confidence_threshold;
+                    updateConfidenceThresholdDisplay(config.confidence_threshold);
+                }
+
+                // Load prompt template
+                if (config.system_prompt_template) {
+                    document.getElementById('prompt-template-editor').value = config.system_prompt_template;
+                }
+
+            } catch (error) {
+                console.error('Failed to load configuration:', error);
+            }
+        }
+
+        // Update confidence threshold display
+        function updateConfidenceThresholdDisplay(value) {
+            document.getElementById('confidence-threshold-value').textContent = parseFloat(value).toFixed(2);
+        }
+
+        // Save confidence threshold
+        async function saveConfidenceThreshold(threshold) {
+            try {
+                const response = await fetch(`${API_BASE}/api/config/confidence-threshold`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threshold: parseFloat(threshold) })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update confidence threshold');
+                }
+
+                showAlert('success', '✓ Confidence threshold updated!');
+
+            } catch (error) {
+                showAlert('error', '✗ Failed to update confidence threshold');
+                console.error('Failed to update confidence threshold:', error);
+            }
+        }
+
+        // Save prompt template
+        async function savePromptTemplate() {
+            const template = document.getElementById('prompt-template-editor').value;
+
+            if (!template.trim()) {
+                showAlert('error', '✗ Prompt template cannot be empty');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/config/prompt-template`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template: template })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update prompt template');
+                }
+
+                showAlert('success', '✓ Prompt template updated!');
+
+            } catch (error) {
+                showAlert('error', '✗ Failed to update prompt template');
+                console.error('Failed to update prompt template:', error);
+            }
+        }
+
+        // Reset prompt template to default
+        async function resetPromptTemplate() {
+            if (!confirm('Are you sure you want to reset the prompt template to default? This cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/config/reset`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to reset configuration');
+                }
+
+                showAlert('success', '✓ Configuration reset to defaults!');
+                await loadCurrentConfig();  // Reload to show defaults
+
+            } catch (error) {
+                showAlert('error', '✗ Failed to reset configuration');
+                console.error('Failed to reset configuration:', error);
+            }
         }
 
         // Load budget alerts
