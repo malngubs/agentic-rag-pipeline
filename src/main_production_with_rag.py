@@ -18,7 +18,7 @@ from datetime import datetime
 import json
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +41,13 @@ try:
 except ImportError:
     CITATIONS_AVAILABLE = False
     logging.warning("⚠️ source_citations.py not found - enhanced citations disabled")
+
+try:
+    from auth import AuthManager, UserCreate, UserLogin, TokenResponse, UserResponse, get_current_user
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    logging.warning("⚠️ auth.py not found - authentication disabled")
 
 # Configure logging
 logging.basicConfig(
@@ -204,7 +211,17 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Citation builder initialization failed: {e}")
                 self.citation_builder = None
-        
+
+        # ✨ PHASE 2: Authentication system
+        self.auth_manager = None
+        if AUTH_AVAILABLE:
+            try:
+                self.auth_manager = AuthManager(db_path="data/auth.db")
+                logger.info("✅ Authentication system initialized: data/auth.db")
+            except Exception as e:
+                logger.error(f"❌ Authentication system initialization failed: {e}")
+                self.auth_manager = None
+
         self.startup_complete = False
     
     async def initialize_components(self):
@@ -463,6 +480,30 @@ async def serve_admin():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/login.html", response_class=HTMLResponse)
+async def serve_login():
+    """Serve the login page"""
+    try:
+        possible_paths = [
+            Path("../login.html"),
+            Path("login.html"),
+            Path("./login.html"),
+            Path(__file__).parent / "login.html",
+            Path(__file__).parent.parent / "login.html"
+        ]
+
+        for path in possible_paths:
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return HTMLResponse(content=f.read())
+
+        raise HTTPException(status_code=404, detail="Login page not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving login.html: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -526,6 +567,97 @@ async def rag_status():
             "app_state_status": app_state.rag_status,
             "timestamp": time.time()
         }
+
+# =============================================================================
+# 🔐 AUTHENTICATION ENDPOINTS (PHASE 2)
+# =============================================================================
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+async def register(user_data: UserCreate):
+    """Register a new user account"""
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    try:
+        # Create user
+        user = app_state.auth_manager.create_user(user_data)
+
+        # Generate token
+        token = app_state.auth_manager.create_access_token(
+            user_id=user.id,
+            email=user.email,
+            role=user.role
+        )
+
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            user=user
+        )
+    except Exception as e:
+        logger.error(f"Registration failed: {e}")
+        raise
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(credentials: UserLogin):
+    """Authenticate user and return access token"""
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    # Authenticate user
+    user_dict = app_state.auth_manager.authenticate_user(
+        email=credentials.email,
+        password=credentials.password
+    )
+
+    if not user_dict:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
+        )
+
+    # Generate token
+    token = app_state.auth_manager.create_access_token(
+        user_id=user_dict['id'],
+        email=user_dict['email'],
+        role=user_dict['role']
+    )
+
+    # Create user response
+    user = UserResponse(
+        id=user_dict['id'],
+        email=user_dict['email'],
+        full_name=user_dict['full_name'],
+        role=user_dict['role'],
+        created_at=user_dict['created_at'],
+        last_login=user_dict['last_login']
+    )
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user
+    )
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_current_user_info(current_user: UserResponse = Depends(lambda: get_current_user(auth_manager=app_state.auth_manager))):
+    """Get current authenticated user info"""
+    return current_user
+
+
+@app.get("/api/auth/users", response_model=List[UserResponse])
+async def list_users(current_user: UserResponse = Depends(lambda: get_current_user(auth_manager=app_state.auth_manager))):
+    """List all users (admin only)"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    return app_state.auth_manager.get_all_users()
+
 
 # =============================================================================
 # 📤 DOCUMENT UPLOAD

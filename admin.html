@@ -967,6 +967,10 @@
                 <span>🔧</span>
                 <span>System Status</span>
             </div>
+            <div class="nav-item" onclick="logout()" style="margin-top: auto; border-top: 1px solid rgba(255,255,255,0.1); color: #e74c3c;">
+                <span>🚪</span>
+                <span>Logout</span>
+            </div>
         </div>
     </div>
 
@@ -1278,6 +1282,63 @@
         // API Configuration - CORRECTED BASE URL
         const API_BASE = window.location.origin;
         const uploadStatus = document.getElementById('upload-status');
+
+        // ===== AUTHENTICATION =====
+        let authToken = null;
+        let currentUser = null;
+
+        // Check authentication on page load
+        function checkAuth() {
+            authToken = localStorage.getItem('auth_token');
+            const userStr = localStorage.getItem('user');
+
+            if (!authToken) {
+                // Not logged in, redirect to login page
+                window.location.href = '/login.html';
+                return false;
+            }
+
+            try {
+                currentUser = JSON.parse(userStr);
+            } catch (e) {
+                console.error('Failed to parse user data:', e);
+                logout();
+                return false;
+            }
+
+            // Verify token with backend
+            fetch(`${API_BASE}/api/auth/me`, {
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // Token invalid
+                    logout();
+                }
+            })
+            .catch(error => {
+                console.error('Auth verification failed:', error);
+            });
+
+            return true;
+        }
+
+        // Logout function
+        function logout() {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user');
+            window.location.href = '/login.html';
+        }
+
+        // Run auth check
+        if (!checkAuth()) {
+            // Prevent rest of page from loading
+            throw new Error('Authentication required');
+        }
+
+        // ===== END AUTHENTICATION =====
 
         // Section Navigation
         function showSection(section) {
