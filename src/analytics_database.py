@@ -379,11 +379,11 @@ class AnalyticsDatabase:
     def get_all_conversations(self, limit: int = 100, offset: int = 0) -> List[Dict]:
         """
         Get list of all conversations with metadata
-        
+
         Args:
             limit: Number of conversations to retrieve
             offset: Offset for pagination
-            
+
         Returns:
             List of conversation metadata dictionaries
         """
@@ -394,8 +394,101 @@ class AnalyticsDatabase:
                 ORDER BY last_message_at DESC
                 LIMIT ? OFFSET ?
             """, (limit, offset))
-            
+
             return [dict(row) for row in cursor.fetchall()]
+
+    def search_conversations(
+        self,
+        query: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Search conversations by various criteria
+
+        Args:
+            query: Search term to find in message content
+            conversation_id: Filter by conversation ID (partial match)
+            user_id: Filter by user ID
+            start_date: Start date for date range filter (ISO format)
+            end_date: End date for date range filter (ISO format)
+            limit: Maximum number of results
+            offset: Offset for pagination
+
+        Returns:
+            Dictionary with 'conversations' list and 'total' count
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build WHERE conditions
+            conditions = []
+            params = []
+
+            # Search in message content
+            if query:
+                conditions.append("""
+                    EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = conversations.conversation_id
+                        AND m.content LIKE ?
+                    )
+                """)
+                params.append(f"%{query}%")
+
+            # Filter by conversation ID (partial match)
+            if conversation_id:
+                conditions.append("conversations.conversation_id LIKE ?")
+                params.append(f"%{conversation_id}%")
+
+            # Filter by user ID
+            if user_id:
+                conditions.append("conversations.user_id = ?")
+                params.append(user_id)
+
+            # Filter by date range
+            if start_date:
+                conditions.append("conversations.last_message_at >= ?")
+                params.append(start_date)
+
+            if end_date:
+                conditions.append("conversations.last_message_at <= ?")
+                params.append(end_date)
+
+            # Build the WHERE clause
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(*) as total
+                FROM conversations
+                WHERE {where_clause}
+            """
+            cursor.execute(count_query, params)
+            total = cursor.fetchone()['total']
+
+            # Get conversations
+            query_sql = f"""
+                SELECT * FROM conversations
+                WHERE {where_clause}
+                ORDER BY last_message_at DESC
+                LIMIT ? OFFSET ?
+            """
+            params.extend([limit, offset])
+            cursor.execute(query_sql, params)
+
+            conversations = [dict(row) for row in cursor.fetchall()]
+
+            return {
+                'conversations': conversations,
+                'total': total,
+                'limit': limit,
+                'offset': offset
+            }
     
     def export_conversation(self, conversation_id: str, format: str = "json") -> str:
         """

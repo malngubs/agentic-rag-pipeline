@@ -1182,11 +1182,11 @@ async def get_conversations(limit: int = 50, offset: int = 0):
     """Get conversation history from analytics database"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         conversations = app_state.analytics_db.get_all_conversations(limit=limit, offset=offset)
         total = app_state.analytics_db.get_total_conversations()
-        
+
         return ConversationHistoryResponse(
             conversations=conversations,
             total=total
@@ -1194,6 +1194,36 @@ async def get_conversations(limit: int = 50, offset: int = 0):
     except Exception as e:
         logger.error(f"Failed to get conversations: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve conversations: {str(e)}")
+
+@app.get("/api/conversations/search")
+async def search_conversations(
+    query: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """Search conversations by various criteria"""
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        result = app_state.analytics_db.search_conversations(
+            query=query,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset
+        )
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to search conversations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to search conversations: {str(e)}")
 
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
 async def get_analytics_summary():
