@@ -604,6 +604,30 @@
             opacity: 0.9;
             font-size: 14px;
         }
+
+        /* Drag & Drop Upload Zone */
+        .upload-area {
+            border: 3px dashed #bdc3c7;
+            border-radius: 12px;
+            padding: 60px 40px;
+            margin: 20px 0;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-area:hover {
+            border-color: #FF6E00;
+            background: #fff5ec;
+            transform: translateY(-2px);
+        }
+
+        .upload-area.dragging {
+            border-color: #27ae60;
+            background: #e8f8f5;
+            border-style: solid;
+            box-shadow: 0 8px 20px rgba(39, 174, 96, 0.2);
+        }
     </style>
 </head>
 <body>
@@ -767,14 +791,61 @@
         <div id="documents-content" class="content-section">
             <div class="header">
                 <h1>Document Management</h1>
-                <button class="button" onclick="document.getElementById('file-input').click()">📤 Upload Document</button>
+                <button class="button" onclick="document.getElementById('bulk-file-input').click()">📤 Upload Documents</button>
             </div>
 
-            <!-- Hidden file input -->
-            <input type="file" id="file-input" style="display: none" accept=".pdf,.docx,.txt,.xlsx,.xls" onchange="uploadFile(this.files[0])">
+            <!-- Drag & Drop Upload Zone -->
+            <div id="drag-drop-zone" class="upload-area"
+                 ondrop="handleDrop(event)"
+                 ondragover="handleDragOver(event)"
+                 ondragleave="handleDragLeave(event)"
+                 onclick="document.getElementById('bulk-file-input').click()">
+                <div style="text-align: center;">
+                    <div style="font-size: 64px; margin-bottom: 20px;">📁</div>
+                    <h3 style="margin: 0 0 10px 0; color: #2c3e50;">Drag & Drop Files Here</h3>
+                    <p style="margin: 0 0 20px 0; color: #7f8c8d;">or click to browse</p>
+                    <p style="margin: 0; color: #95a5a6; font-size: 14px;">
+                        Supports: PDF, DOCX, TXT, MD, XLSX, XLS, PPTX
+                    </p>
+                    <p style="margin: 5px 0 0 0; color: #95a5a6; font-size: 13px;">
+                        Max file size: 50MB per file
+                    </p>
+                </div>
+            </div>
 
-            <!-- Upload Status -->
-            <div id="upload-status"></div>
+            <!-- Hidden file input for multiple files -->
+            <input type="file" id="bulk-file-input" style="display: none"
+                   accept=".pdf,.docx,.txt,.xlsx,.xls,.md,.pptx"
+                   multiple
+                   onchange="handleFileSelect(event)">
+
+            <!-- Upload Queue -->
+            <div id="upload-queue" style="display: none; margin: 20px 0;">
+                <div class="status-card">
+                    <h3 style="margin-bottom: 15px;">Upload Queue</h3>
+                    <div id="upload-queue-items"></div>
+                    <div style="margin-top: 15px; display: flex; gap: 10px;">
+                        <button class="button" onclick="startBulkUpload()" id="start-upload-btn">
+                            🚀 Start Upload
+                        </button>
+                        <button class="button button-secondary" onclick="clearUploadQueue()">
+                            ✕ Clear Queue
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Upload Progress -->
+            <div id="upload-progress-section" style="display: none; margin: 20px 0;">
+                <div class="status-card">
+                    <h3 style="margin-bottom: 15px;">Upload Progress</h3>
+                    <div id="upload-progress-items"></div>
+                    <div id="upload-summary" style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                        <strong>Summary:</strong>
+                        <span id="upload-summary-text">Ready to upload</span>
+                    </div>
+                </div>
+            </div>
 
             <!-- Documents Table -->
             <div class="table-container">
@@ -1156,7 +1227,323 @@
             }
         }
 
-        // Upload file
+        // ===== DRAG & DROP BULK UPLOAD FUNCTIONALITY =====
+
+        let uploadQueue = [];
+        const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+        const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.xls', '.pptx'];
+
+        // Handle drag over event
+        function handleDragOver(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const dropZone = document.getElementById('drag-drop-zone');
+            dropZone.classList.add('dragging');
+        }
+
+        // Handle drag leave event
+        function handleDragLeave(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const dropZone = document.getElementById('drag-drop-zone');
+            dropZone.classList.remove('dragging');
+        }
+
+        // Handle drop event
+        function handleDrop(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const dropZone = document.getElementById('drag-drop-zone');
+            dropZone.classList.remove('dragging');
+
+            const files = Array.from(event.dataTransfer.files);
+            addFilesToQueue(files);
+        }
+
+        // Handle file select from input
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            addFilesToQueue(files);
+            // Reset input
+            event.target.value = '';
+        }
+
+        // Validate file
+        function validateFile(file) {
+            const errors = [];
+
+            // Check file size
+            if (file.size > MAX_FILE_SIZE) {
+                errors.push(`File too large (max 50MB)`);
+            }
+
+            // Check file extension
+            const ext = '.' + file.name.split('.').pop().toLowerCase();
+            if (!ALLOWED_EXTENSIONS.includes(ext)) {
+                errors.push(`File type not supported (${ext})`);
+            }
+
+            return errors;
+        }
+
+        // Add files to upload queue
+        function addFilesToQueue(files) {
+            let validFiles = 0;
+            let invalidFiles = 0;
+
+            files.forEach(file => {
+                const errors = validateFile(file);
+
+                if (errors.length === 0) {
+                    // Check if file already in queue
+                    const existsInQueue = uploadQueue.some(f => f.name === file.name && f.size === file.size);
+
+                    if (!existsInQueue) {
+                        uploadQueue.push({
+                            file: file,
+                            status: 'queued',
+                            progress: 0,
+                            error: null,
+                            id: Date.now() + Math.random()
+                        });
+                        validFiles++;
+                    } else {
+                        invalidFiles++;
+                        showAlert('info', `⚠️ File "${file.name}" already in queue`);
+                    }
+                } else {
+                    invalidFiles++;
+                    showAlert('error', `✗ ${file.name}: ${errors.join(', ')}`);
+                }
+            });
+
+            if (validFiles > 0) {
+                renderUploadQueue();
+                showAlert('success', `✓ Added ${validFiles} file(s) to queue`);
+            }
+
+            if (invalidFiles > 0 && validFiles === 0) {
+                showAlert('error', `✗ ${invalidFiles} file(s) were invalid`);
+            }
+        }
+
+        // Render upload queue
+        function renderUploadQueue() {
+            const queueSection = document.getElementById('upload-queue');
+            const queueItems = document.getElementById('upload-queue-items');
+
+            if (uploadQueue.length === 0) {
+                queueSection.style.display = 'none';
+                return;
+            }
+
+            queueSection.style.display = 'block';
+
+            let html = '';
+            uploadQueue.forEach((item, index) => {
+                const sizeInMB = (item.file.size / (1024 * 1024)).toFixed(2);
+                const statusIcon = item.status === 'queued' ? '⏳' :
+                                 item.status === 'uploading' ? '⏫' :
+                                 item.status === 'complete' ? '✅' : '❌';
+
+                html += `
+                    <div style="padding: 12px; background: ${item.status === 'error' ? '#fee' : '#f8f9fa'}; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 20px;">${statusIcon}</span>
+                                <div>
+                                    <strong>${item.file.name}</strong>
+                                    <div style="font-size: 12px; color: #666;">
+                                        ${sizeInMB} MB • ${item.file.type || 'Unknown type'}
+                                    </div>
+                                    ${item.error ? `<div style="color: #e74c3c; font-size: 12px; margin-top: 4px;">${item.error}</div>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        ${item.status === 'queued' ? `
+                            <button class="btn-small btn-delete" onclick="removeFromQueue(${index})" style="margin-left: 10px;">
+                                Remove
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            queueItems.innerHTML = html;
+        }
+
+        // Remove file from queue
+        function removeFromQueue(index) {
+            uploadQueue.splice(index, 1);
+            renderUploadQueue();
+            if (uploadQueue.length === 0) {
+                showAlert('info', 'Upload queue cleared');
+            }
+        }
+
+        // Clear entire upload queue
+        function clearUploadQueue() {
+            uploadQueue = [];
+            renderUploadQueue();
+            document.getElementById('upload-progress-section').style.display = 'none';
+            showAlert('info', '✓ Upload queue cleared');
+        }
+
+        // Start bulk upload
+        async function startBulkUpload() {
+            if (uploadQueue.length === 0) {
+                showAlert('error', 'No files in queue');
+                return;
+            }
+
+            // Show progress section
+            document.getElementById('upload-progress-section').style.display = 'block';
+            document.getElementById('start-upload-btn').disabled = true;
+            document.getElementById('start-upload-btn').textContent = '⏳ Uploading...';
+
+            let completed = 0;
+            let failed = 0;
+
+            // Update summary
+            updateUploadSummary(`Uploading 0 of ${uploadQueue.length} files...`);
+
+            // Upload files sequentially (could be made parallel with Promise.all)
+            for (let i = 0; i < uploadQueue.length; i++) {
+                const item = uploadQueue[i];
+
+                if (item.status !== 'queued') continue;
+
+                item.status = 'uploading';
+                renderUploadQueue();
+                renderUploadProgress();
+
+                try {
+                    const result = await uploadSingleFile(item.file, (progress) => {
+                        item.progress = progress;
+                        renderUploadProgress();
+                    });
+
+                    if (result.success) {
+                        item.status = 'complete';
+                        item.progress = 100;
+                        completed++;
+                    } else {
+                        item.status = 'error';
+                        item.error = result.message || 'Upload failed';
+                        failed++;
+                    }
+                } catch (error) {
+                    item.status = 'error';
+                    item.error = error.message || 'Network error';
+                    failed++;
+                }
+
+                renderUploadQueue();
+                renderUploadProgress();
+                updateUploadSummary(`Uploaded ${completed + failed} of ${uploadQueue.length} files (${completed} successful, ${failed} failed)`);
+            }
+
+            // All uploads complete
+            document.getElementById('start-upload-btn').disabled = false;
+            document.getElementById('start-upload-btn').textContent = '🚀 Start Upload';
+
+            if (completed > 0) {
+                showAlert('success', `✓ Successfully uploaded ${completed} file(s)`);
+                loadDocuments();
+                refreshData();
+            }
+
+            if (failed > 0) {
+                showAlert('error', `✗ ${failed} file(s) failed to upload`);
+            }
+
+            updateUploadSummary(`Complete: ${completed} successful, ${failed} failed`);
+        }
+
+        // Upload single file with progress
+        async function uploadSingleFile(file, onProgress) {
+            return new Promise((resolve, reject) => {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const xhr = new XMLHttpRequest();
+
+                // Track upload progress
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percentComplete = (e.loaded / e.total) * 100;
+                        onProgress(percentComplete);
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        try {
+                            const result = JSON.parse(xhr.responseText);
+                            resolve({ success: result.processed, message: result.message });
+                        } catch (e) {
+                            resolve({ success: false, message: 'Invalid response' });
+                        }
+                    } else {
+                        try {
+                            const result = JSON.parse(xhr.responseText);
+                            resolve({ success: false, message: result.message || 'Upload failed' });
+                        } catch (e) {
+                            resolve({ success: false, message: `HTTP ${xhr.status}` });
+                        }
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    reject(new Error('Network error'));
+                });
+
+                xhr.addEventListener('abort', () => {
+                    reject(new Error('Upload cancelled'));
+                });
+
+                xhr.open('POST', `${API_BASE}/api/upload`);
+                xhr.send(formData);
+            });
+        }
+
+        // Render upload progress
+        function renderUploadProgress() {
+            const progressItems = document.getElementById('upload-progress-items');
+
+            let html = '';
+            uploadQueue.forEach((item) => {
+                if (item.status === 'uploading' || item.status === 'complete' || item.status === 'error') {
+                    const progressColor = item.status === 'complete' ? '#27ae60' :
+                                        item.status === 'error' ? '#e74c3c' : '#FF6E00';
+
+                    html += `
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span style="font-weight: 600; color: #2c3e50;">${item.file.name}</span>
+                                <span style="color: ${progressColor}; font-weight: 600;">
+                                    ${item.status === 'complete' ? '✅ Complete' :
+                                      item.status === 'error' ? '❌ Failed' :
+                                      `${Math.round(item.progress)}%`}
+                                </span>
+                            </div>
+                            <div style="width: 100%; height: 8px; background: #ecf0f1; border-radius: 4px; overflow: hidden;">
+                                <div style="width: ${item.progress}%; height: 100%; background: ${progressColor}; transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+
+            progressItems.innerHTML = html || '<p style="text-align: center; color: #999;">No uploads in progress</p>';
+        }
+
+        // Update upload summary
+        function updateUploadSummary(text) {
+            document.getElementById('upload-summary-text').textContent = text;
+        }
+
+        // Upload file (legacy single file upload - kept for compatibility)
         async function uploadFile(file) {
             if (!file) return;
 
