@@ -44,6 +44,13 @@ except ImportError:
     VERSIONS_AVAILABLE = False
     logging.warning("⚠️ document_versions.py not found - version control disabled")
 
+try:
+    from document_tags import DocumentTagManager
+    TAGS_AVAILABLE = True
+except ImportError:
+    TAGS_AVAILABLE = False
+    logging.warning("⚠️ document_tags.py not found - document tagging disabled")
+
 # ✨ PHASE 1 IMPORTS - New functionality
 try:
     from analytics_database import AnalyticsDatabase
@@ -256,6 +263,16 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Document version manager initialization failed: {e}")
                 self.version_manager = None
+
+        # ✨ PHASE 4: Document tag manager
+        self.tag_manager = None
+        if TAGS_AVAILABLE:
+            try:
+                self.tag_manager = DocumentTagManager(storage_path="data/document_tags.json")
+                logger.info("✅ Document tag manager initialized")
+            except Exception as e:
+                logger.error(f"❌ Document tag manager initialization failed: {e}")
+                self.tag_manager = None
 
         self.startup_complete = False
     
@@ -762,6 +779,90 @@ async def delete_document(doc_id: str):
     except Exception as e:
         logger.error(f"Failed to delete document: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+# =============================================================================
+# ✨ PHASE 4: DOCUMENT TAGGING ENDPOINTS
+# =============================================================================
+
+@app.post("/api/documents/{doc_id}/tags")
+async def add_document_tags(doc_id: str, tags: List[str]):
+    """Add tags to a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        updated_tags = app_state.tag_manager.add_tags(doc_id, tags)
+        return JSONResponse(content={"success": True, "doc_id": doc_id, "tags": updated_tags})
+    except Exception as e:
+        logger.error(f"Failed to add tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/documents/{doc_id}/tags/{tag}")
+async def remove_document_tag(doc_id: str, tag: str):
+    """Remove a tag from a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        updated_tags = app_state.tag_manager.remove_tag(doc_id, tag)
+        return JSONResponse(content={"success": True, "doc_id": doc_id, "tags": updated_tags})
+    except Exception as e:
+        logger.error(f"Failed to remove tag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/documents/{doc_id}/tags")
+async def get_document_tags(doc_id: str):
+    """Get all tags for a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tags = app_state.tag_manager.get_tags(doc_id)
+        return JSONResponse(content={"doc_id": doc_id, "tags": tags})
+    except Exception as e:
+        logger.error(f"Failed to get tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags")
+async def get_all_tags():
+    """Get all unique tags in the system"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tags = app_state.tag_manager.get_all_tags()
+        tag_stats = app_state.tag_manager.get_tag_stats()
+        return JSONResponse(content={"tags": tags, "tag_stats": tag_stats, "total_tags": len(tags)})
+    except Exception as e:
+        logger.error(f"Failed to get tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags/autocomplete")
+async def autocomplete_tags(prefix: str = "", limit: int = 10):
+    """Get tag suggestions for autocomplete"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        suggestions = app_state.tag_manager.autocomplete_tags(prefix, limit)
+        return JSONResponse(content={"prefix": prefix, "suggestions": suggestions})
+    except Exception as e:
+        logger.error(f"Failed to autocomplete tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags/search")
+async def search_by_tags(tags: str, match_all: bool = False):
+    """Find documents that have specific tags"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+        matching_docs = app_state.tag_manager.search_by_tags(tag_list, match_all)
+        return JSONResponse(content={"tags": tag_list, "matching_documents": matching_docs, "count": len(matching_docs)})
+    except Exception as e:
+        logger.error(f"Failed to search by tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
 # 💬 CHAT ENDPOINTS
