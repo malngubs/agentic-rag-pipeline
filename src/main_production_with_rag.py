@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from dataclasses import asdict
 import json
 
 import uvicorn
@@ -34,6 +35,14 @@ try:
 except ImportError:
     CONFIG_AVAILABLE = False
     logging.warning("⚠️ config_manager.py not found - configuration features disabled")
+
+# ✨ PHASE 3 IMPORTS - Advanced Document Management
+try:
+    from document_versions import DocumentVersionManager, set_version_manager, get_version_manager
+    VERSIONS_AVAILABLE = True
+except ImportError:
+    VERSIONS_AVAILABLE = False
+    logging.warning("⚠️ document_versions.py not found - version control disabled")
 
 # ✨ PHASE 1 IMPORTS - New functionality
 try:
@@ -233,6 +242,20 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Configuration manager initialization failed: {e}")
                 self.config_manager = None
+
+        # ✨ PHASE 3: Document version manager
+        self.version_manager = None
+        if VERSIONS_AVAILABLE:
+            try:
+                self.version_manager = DocumentVersionManager(
+                    db_path="data/document_versions.db",
+                    storage_path="data/document_versions"
+                )
+                set_version_manager(self.version_manager)  # Set global instance
+                logger.info("✅ Document version manager initialized")
+            except Exception as e:
+                logger.error(f"❌ Document version manager initialization failed: {e}")
+                self.version_manager = None
 
         self.startup_complete = False
     
@@ -601,28 +624,70 @@ async def upload_document(file: UploadFile = File(...)):
                 chunks_created=None
             )
         
-        # Process document
-        processed = await app_state.rag_system.process_document(file_path, content)
-        
-        if processed:
-            status = await app_state.rag_system.get_system_status()
-            chunks_created = status.get('total_chunks', 0)
-            
-            # ✨ PHASE 1: Log document upload to analytics
-            if app_state.analytics_db:
+        # Save file temporarily for version storage
+        import tempfile
+        temp_file = None
+        document_id = None
+
+        try:
+            # Create temp file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
+            temp_file.write(content)
+            temp_file.close()
+
+            # Generate document ID from filename
+            import hashlib
+            document_id = hashlib.md5(file.filename.encode()).hexdigest()[:16]
+
+            # Process document
+            processed = await app_state.rag_system.process_document(file_path, content)
+
+            if processed:
+                status = await app_state.rag_system.get_system_status()
+                chunks_created = status.get('total_chunks', 0)
+
+                # ✨ PHASE 3: Create document version
+                if app_state.version_manager:
+                    try:
+                        version = app_state.version_manager.create_version(
+                            document_id=document_id,
+                            file_path=temp_file.name,
+                            file_name=file.filename,
+                            file_size=file_size,
+                            uploaded_by=None,  # TODO: Get from auth context
+                            chunks_count=chunks_created,
+                            metadata={
+                                'file_extension': file_extension,
+                                'original_name': file.filename
+                            },
+                            change_description="New upload"
+                        )
+                        logger.info(f"✅ Created version {version.version_number} for document {document_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create document version: {e}")
+
+                # ✨ PHASE 1: Log document upload to analytics
+                if app_state.analytics_db:
+                    try:
+                        app_state.analytics_db.log_document_upload(
+                            filename=file.filename,
+                            file_size=file_size,
+                            chunks_created=chunks_created,
+                            success=True
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log upload to analytics: {e}")
+
+                message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
+            else:
+                message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
+        finally:
+            # Cleanup temp file
+            if temp_file and Path(temp_file.name).exists():
                 try:
-                    app_state.analytics_db.log_document_upload(
-                        filename=file.filename,
-                        file_size=file_size,
-                        chunks_created=chunks_created,
-                        success=True
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log upload to analytics: {e}")
-            
-            message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
-        else:
-            message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
+                    Path(temp_file.name).unlink()
+                except:
+                    pass
         
         return UploadResponse(
             message=message,
@@ -1488,6 +1553,131 @@ async def reset_configuration():
         return JSONResponse(content=updated_config)
     except Exception as e:
         logger.error(f"Failed to reset configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# ✨ PHASE 3: DOCUMENT VERSION CONTROL API ENDPOINTS
+# =============================================================================
+
+@app.get("/api/documents/{document_id}/versions")
+async def get_document_versions(document_id: str):
+    """Get all versions of a specific document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        versions = app_state.version_manager.get_versions(document_id)
+        return JSONResponse(content={
+            "document_id": document_id,
+            "versions": [asdict(v) for v in versions],
+            "total_versions": len(versions)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/versions/{version_number}")
+async def get_document_version(document_id: str, version_number: int):
+    """Get specific version of a document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        version = app_state.version_manager.get_version(document_id, version_number)
+        if not version:
+            raise HTTPException(status_code=404, detail=f"Version {version_number} not found")
+
+        return JSONResponse(content=asdict(version))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/{document_id}/versions/{version_number}/revert")
+async def revert_to_version(document_id: str, version_number: int):
+    """Revert document to a specific version"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Revert to version (creates new version from old one)
+        new_version = app_state.version_manager.revert_to_version(
+            document_id=document_id,
+            version_number=version_number,
+            reverted_by=None  # TODO: Get from auth context
+        )
+
+        # TODO: Re-process document with RAG system to update embeddings
+        logger.info(f"✅ Reverted document {document_id} to version {version_number}")
+
+        return JSONResponse(content={
+            "message": f"Successfully reverted to version {version_number}",
+            "new_version": asdict(new_version)
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to revert version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/documents/{document_id}/versions/{version_number}")
+async def delete_document_version(document_id: str, version_number: int):
+    """Delete a specific version (cannot delete current version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        success = app_state.version_manager.delete_version(document_id, version_number)
+        if success:
+            return JSONResponse(content={
+                "message": f"Version {version_number} deleted successfully"
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Version {version_number} not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to delete version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/with-versions")
+async def get_all_documents_with_versions():
+    """Get all documents with their version information"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        documents = app_state.version_manager.get_all_documents_with_versions()
+        return JSONResponse(content={
+            "documents": documents,
+            "total": len(documents)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get documents with versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/versions/current")
+async def get_current_version(document_id: str):
+    """Get current version of a document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        version = app_state.version_manager.get_current_version(document_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        return JSONResponse(content=asdict(version))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get current version: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
