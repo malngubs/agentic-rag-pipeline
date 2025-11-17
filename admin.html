@@ -380,6 +380,155 @@
             opacity: 0.8;
             transform: translateY(-1px);
         }
+
+        /* Budget Alerts */
+        .budget-alerts {
+            margin-bottom: 30px;
+        }
+
+        .budget-alert-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-left: 4px solid #95a5a6;
+        }
+
+        .budget-alert-card.none {
+            border-left-color: #27ae60;
+            background: linear-gradient(to right, #f0fdf4, white);
+        }
+
+        .budget-alert-card.info {
+            border-left-color: #3498db;
+            background: linear-gradient(to right, #dbeafe, white);
+        }
+
+        .budget-alert-card.warning {
+            border-left-color: #f39c12;
+            background: linear-gradient(to right, #fef3c7, white);
+        }
+
+        .budget-alert-card.critical {
+            border-left-color: #e74c3c;
+            background: linear-gradient(to right, #fee2e2, white);
+        }
+
+        .budget-alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .budget-alert-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .budget-alert-icon {
+            font-size: 24px;
+        }
+
+        .budget-alert-level {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .budget-alert-level.none {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .budget-alert-level.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .budget-alert-level.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .budget-alert-level.critical {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .budget-meters {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .budget-meter {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .budget-meter-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .budget-meter-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        .budget-meter-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+
+        .budget-progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .budget-progress-fill {
+            height: 100%;
+            background: #27ae60;
+            transition: width 0.3s ease, background-color 0.3s ease;
+            border-radius: 4px;
+        }
+
+        .budget-progress-fill.warning {
+            background: #f39c12;
+        }
+
+        .budget-progress-fill.critical {
+            background: #e74c3c;
+        }
+
+        .budget-meter-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        @media (max-width: 768px) {
+            .budget-meters {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -444,6 +593,51 @@
                 <div class="stat-card">
                     <h3 id="avg-response-time">0s</h3>
                     <p>Avg Response Time</p>
+                </div>
+            </div>
+
+            <!-- Budget Alerts -->
+            <div class="budget-alerts" id="budget-alerts-section" style="display: none;">
+                <div class="budget-alert-card" id="budget-alert-card">
+                    <div class="budget-alert-header">
+                        <div class="budget-alert-title">
+                            <span class="budget-alert-icon" id="budget-icon">💰</span>
+                            <span>Cost Budget Monitoring</span>
+                        </div>
+                        <div class="budget-alert-level" id="budget-alert-level">Loading...</div>
+                    </div>
+
+                    <div class="budget-meters">
+                        <!-- Daily Budget -->
+                        <div class="budget-meter">
+                            <div class="budget-meter-header">
+                                <span class="budget-meter-label">Daily Budget</span>
+                                <span class="budget-meter-value" id="daily-spent">$0.00</span>
+                            </div>
+                            <div class="budget-progress-bar">
+                                <div class="budget-progress-fill" id="daily-progress"></div>
+                            </div>
+                            <div class="budget-meter-details">
+                                <span id="daily-percentage">0%</span>
+                                <span id="daily-budget-text">of $10.00</span>
+                            </div>
+                        </div>
+
+                        <!-- Monthly Budget -->
+                        <div class="budget-meter">
+                            <div class="budget-meter-header">
+                                <span class="budget-meter-label">Monthly Budget</span>
+                                <span class="budget-meter-value" id="monthly-spent">$0.00</span>
+                            </div>
+                            <div class="budget-progress-bar">
+                                <div class="budget-progress-fill" id="monthly-progress"></div>
+                            </div>
+                            <div class="budget-meter-details">
+                                <span id="monthly-percentage">0%</span>
+                                <span id="monthly-budget-text">of $300.00</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -904,6 +1098,95 @@
             }, 5000);
         }
 
+        // Load budget alerts
+        async function loadBudgetAlerts() {
+            try {
+                // Configurable budget limits
+                const dailyBudget = 10.0;  // $10 per day
+                const monthlyBudget = 300.0;  // $300 per month
+
+                const response = await fetch(`${API_BASE}/api/analytics/budget-alert?daily_budget=${dailyBudget}&monthly_budget=${monthlyBudget}`);
+                const data = await response.json();
+
+                // Show the alerts section
+                document.getElementById('budget-alerts-section').style.display = 'block';
+
+                // Get alert level
+                const alertLevel = data.alert_level || 'none';
+                const card = document.getElementById('budget-alert-card');
+                const levelBadge = document.getElementById('budget-alert-level');
+                const icon = document.getElementById('budget-icon');
+
+                // Remove existing classes
+                card.className = 'budget-alert-card';
+                levelBadge.className = 'budget-alert-level';
+
+                // Add new classes based on alert level
+                card.classList.add(alertLevel);
+                levelBadge.classList.add(alertLevel);
+
+                // Update icon and text based on alert level
+                const icons = {
+                    'none': '✅',
+                    'info': '💰',
+                    'warning': '⚠️',
+                    'critical': '🚨'
+                };
+
+                const labels = {
+                    'none': 'All Good',
+                    'info': 'Info',
+                    'warning': 'Warning',
+                    'critical': 'Critical'
+                };
+
+                icon.textContent = icons[alertLevel] || '💰';
+                levelBadge.textContent = labels[alertLevel] || 'Unknown';
+
+                // Update daily budget
+                if (data.daily) {
+                    document.getElementById('daily-spent').textContent = `$${data.daily.spent.toFixed(2)}`;
+                    document.getElementById('daily-percentage').textContent = `${Math.round(data.daily.percentage)}%`;
+                    document.getElementById('daily-budget-text').textContent = `of $${data.daily.budget.toFixed(2)}`;
+
+                    const dailyProgress = document.getElementById('daily-progress');
+                    dailyProgress.style.width = `${Math.min(data.daily.percentage, 100)}%`;
+
+                    // Apply color based on percentage
+                    dailyProgress.className = 'budget-progress-fill';
+                    if (data.daily.percentage >= 90) {
+                        dailyProgress.classList.add('critical');
+                    } else if (data.daily.percentage >= 75) {
+                        dailyProgress.classList.add('warning');
+                    }
+                }
+
+                // Update monthly budget
+                if (data.monthly) {
+                    document.getElementById('monthly-spent').textContent = `$${data.monthly.spent.toFixed(2)}`;
+                    document.getElementById('monthly-percentage').textContent = `${Math.round(data.monthly.percentage)}%`;
+                    document.getElementById('monthly-budget-text').textContent = `of $${data.monthly.budget.toFixed(2)}`;
+
+                    const monthlyProgress = document.getElementById('monthly-progress');
+                    monthlyProgress.style.width = `${Math.min(data.monthly.percentage, 100)}%`;
+
+                    // Apply color based on percentage
+                    monthlyProgress.className = 'budget-progress-fill';
+                    if (data.monthly.percentage >= 90) {
+                        monthlyProgress.classList.add('critical');
+                    } else if (data.monthly.percentage >= 75) {
+                        monthlyProgress.classList.add('warning');
+                    }
+                }
+
+                console.log('Budget alerts loaded successfully');
+            } catch (error) {
+                console.error('Error loading budget alerts:', error);
+                // Hide the section if there's an error
+                document.getElementById('budget-alerts-section').style.display = 'none';
+            }
+        }
+
         // Refresh dashboard data
         async function refreshData() {
             try {
@@ -947,6 +1230,9 @@
                     document.getElementById('total-queries').textContent = analyticsData.total_queries || 0;
                     document.getElementById('avg-response-time').textContent = `${(analyticsData.avg_response_time || 0).toFixed(2)}s`;
                 }
+
+                // Load budget alerts
+                await loadBudgetAlerts();
 
                 console.log('Dashboard refreshed successfully');
             } catch (error) {
