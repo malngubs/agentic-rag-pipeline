@@ -1680,6 +1680,86 @@ async def get_current_version(document_id: str):
         logger.error(f"Failed to get current version: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/documents/{document_id}/preview")
+async def preview_document(document_id: str, version: Optional[int] = None):
+    """Serve document file for preview (current version or specific version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Get version to preview
+        if version is not None:
+            doc_version = app_state.version_manager.get_version(document_id, version)
+        else:
+            doc_version = app_state.version_manager.get_current_version(document_id)
+
+        if not doc_version:
+            raise HTTPException(status_code=404, detail="Document or version not found")
+
+        # Serve file
+        file_path = Path(doc_version.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+        # Determine media type
+        media_types = {
+            '.pdf': 'application/pdf',
+            '.txt': 'text/plain',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.xls': 'application/vnd.ms-excel'
+        }
+
+        file_ext = file_path.suffix.lower()
+        media_type = media_types.get(file_ext, 'application/octet-stream')
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=media_type,
+            filename=doc_version.file_name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve document for preview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/download")
+async def download_document(document_id: str, version: Optional[int] = None):
+    """Download document file (current version or specific version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Get version to download
+        if version is not None:
+            doc_version = app_state.version_manager.get_version(document_id, version)
+        else:
+            doc_version = app_state.version_manager.get_current_version(document_id)
+
+        if not doc_version:
+            raise HTTPException(status_code=404, detail="Document or version not found")
+
+        # Serve file for download
+        file_path = Path(doc_version.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+        return FileResponse(
+            path=str(file_path),
+            filename=doc_version.file_name,
+            media_type='application/octet-stream'
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve document for download: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER
 # =============================================================================

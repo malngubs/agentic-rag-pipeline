@@ -713,6 +713,35 @@
             </div>
         </div>
 
+        <!-- ✨ PHASE 3: Document Preview Modal -->
+        <div id="document-preview-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; overflow: auto;">
+            <div style="position: relative; max-width: 1200px; margin: 20px auto; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+                <!-- Modal Header -->
+                <div style="padding: 20px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 12px 12px 0 0;">
+                    <div>
+                        <h2 style="margin: 0; font-size: 20px;" id="preview-title">Document Preview</h2>
+                        <p style="margin: 5px 0 0 0; opacity: 0.9; font-size: 14px;" id="preview-subtitle">Loading...</p>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="downloadCurrentPreview()" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                            📥 Download
+                        </button>
+                        <button onclick="closePreview()" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                            ✕ Close
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Modal Content -->
+                <div id="preview-content" style="padding: 20px; min-height: 600px; max-height: 80vh; overflow: auto;">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading preview...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Conversations Section -->
         <div id="conversations-content" class="content-section">
             <div class="header">
@@ -979,6 +1008,7 @@
                                         <td>${new Date(doc.upload_date).toLocaleDateString()}</td>
                                         <td>
                                             <div class="action-buttons">
+                                                <button class="btn-small" onclick="previewDocument('${doc.doc_id}', '${doc.filename}', '${doc.file_type}')">👁️ Preview</button>
                                                 <button class="btn-small btn-delete" onclick="deleteDocument('${doc.doc_id}', '${doc.filename}')">🗑️ Delete</button>
                                             </div>
                                         </td>
@@ -1022,6 +1052,135 @@
                 console.error('Delete error:', error);
             }
         }
+
+        // ===== PHASE 3: DOCUMENT PREVIEW FUNCTIONS =====
+
+        let currentPreviewDocId = null;
+        let currentPreviewVersion = null;
+
+        async function previewDocument(docId, filename, fileType) {
+            currentPreviewDocId = docId;
+            currentPreviewVersion = null;
+
+            // Show modal
+            document.getElementById('document-preview-modal').style.display = 'block';
+            document.getElementById('preview-title').textContent = filename;
+            document.getElementById('preview-subtitle').textContent = `Type: ${fileType.toUpperCase()}`;
+
+            const content = document.getElementById('preview-content');
+            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading preview...</p></div>';
+
+            try {
+                const previewUrl = `${API_BASE}/api/documents/${docId}/preview`;
+
+                // Handle different file types
+                if (fileType.toLowerCase() === 'pdf') {
+                    // Use iframe for PDF with native browser viewer
+                    content.innerHTML = `
+                        <iframe
+                            src="${previewUrl}"
+                            style="width: 100%; height: 700px; border: none; border-radius: 8px;"
+                            title="PDF Preview">
+                        </iframe>
+                    `;
+                } else if (fileType.toLowerCase() === 'txt') {
+                    // Fetch and display text content
+                    const response = await fetch(previewUrl);
+                    const text = await response.text();
+                    content.innerHTML = `
+                        <pre style="
+                            background: #f8f9fa;
+                            padding: 20px;
+                            border-radius: 8px;
+                            overflow-x: auto;
+                            white-space: pre-wrap;
+                            word-wrap: break-word;
+                            font-family: 'Monaco', 'Menlo', monospace;
+                            font-size: 14px;
+                            line-height: 1.6;
+                            max-height: 600px;
+                            overflow-y: auto;
+                        ">${escapeHtml(text)}</pre>
+                    `;
+                } else if (fileType.toLowerCase() === 'docx' || fileType.toLowerCase() === 'xlsx' || fileType.toLowerCase() === 'xls') {
+                    // For Office documents, show download option
+                    content.innerHTML = `
+                        <div style="text-align: center; padding: 60px 20px;">
+                            <div style="font-size: 64px; margin-bottom: 20px;">📄</div>
+                            <h3 style="margin: 0 0 10px 0;">Preview not available</h3>
+                            <p style="color: #666; margin: 0 0 30px 0;">
+                                ${fileType.toUpperCase()} files cannot be previewed directly.
+                            </p>
+                            <button
+                                onclick="downloadCurrentPreview()"
+                                class="button"
+                                style="padding: 12px 24px; font-size: 16px;">
+                                📥 Download to view
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = `
+                        <div style="text-align: center; padding: 60px 20px;">
+                            <div style="font-size: 64px; margin-bottom: 20px;">❓</div>
+                            <h3 style="margin: 0 0 10px 0;">Preview not supported</h3>
+                            <p style="color: #666; margin: 0 0 30px 0;">
+                                This file type (${fileType}) does not support preview.
+                            </p>
+                            <button
+                                onclick="downloadCurrentPreview()"
+                                class="button"
+                                style="padding: 12px 24px; font-size: 16px;">
+                                📥 Download file
+                            </button>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Preview error:', error);
+                content.innerHTML = `
+                    <div style="text-align: center; padding: 60px 20px; color: #e74c3c;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">⚠️</div>
+                        <h3 style="margin: 0 0 10px 0;">Preview failed</h3>
+                        <p style="margin: 0;">${error.message || 'Unknown error'}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function closePreview() {
+            document.getElementById('document-preview-modal').style.display = 'none';
+            currentPreviewDocId = null;
+            currentPreviewVersion = null;
+        }
+
+        function downloadCurrentPreview() {
+            if (!currentPreviewDocId) return;
+
+            const versionParam = currentPreviewVersion ? `?version=${currentPreviewVersion}` : '';
+            const downloadUrl = `${API_BASE}/api/documents/${currentPreviewDocId}/download${versionParam}`;
+
+            // Create temporary link and click it
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close preview on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closePreview();
+            }
+        });
 
         // Load conversations
         async function loadConversations() {
