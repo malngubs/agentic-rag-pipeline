@@ -379,11 +379,11 @@ class AnalyticsDatabase:
     def get_all_conversations(self, limit: int = 100, offset: int = 0) -> List[Dict]:
         """
         Get list of all conversations with metadata
-        
+
         Args:
             limit: Number of conversations to retrieve
             offset: Offset for pagination
-            
+
         Returns:
             List of conversation metadata dictionaries
         """
@@ -394,9 +394,118 @@ class AnalyticsDatabase:
                 ORDER BY last_message_at DESC
                 LIMIT ? OFFSET ?
             """, (limit, offset))
-            
+
             return [dict(row) for row in cursor.fetchall()]
-    
+
+    def search_conversations(self,
+                           search_query: str = None,
+                           start_date: str = None,
+                           end_date: str = None,
+                           limit: int = 100,
+                           offset: int = 0) -> Dict[str, Any]:
+        """
+        Search conversations by keyword, date range, or other criteria
+
+        Args:
+            search_query: Keyword to search in messages
+            start_date: Start date filter (YYYY-MM-DD)
+            end_date: End date filter (YYYY-MM-DD)
+            limit: Maximum results to return
+            offset: Offset for pagination
+
+        Returns:
+            Dictionary with conversations list and total count
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build dynamic query
+            conditions = []
+            params = []
+
+            # Base query joins conversations with messages for text search
+            if search_query:
+                # Search in both query_text and response_text from query_metrics
+                query = """
+                    SELECT DISTINCT
+                        c.*,
+                        GROUP_CONCAT(DISTINCT qm.query_text || ' ' || qm.response_text, ' ') as search_content
+                    FROM conversations c
+                    LEFT JOIN query_metrics qm ON c.conversation_id = qm.conversation_id
+                    WHERE 1=1
+                """
+
+                # Add search condition
+                conditions.append("(qm.query_text LIKE ? OR qm.response_text LIKE ?)")
+                search_term = f"%{search_query}%"
+                params.extend([search_term, search_term])
+            else:
+                query = "SELECT * FROM conversations WHERE 1=1"
+
+            # Date range filters
+            if start_date:
+                conditions.append("date(created_at) >= date(?)")
+                params.append(start_date)
+
+            if end_date:
+                conditions.append("date(created_at) <= date(?)")
+                params.append(end_date)
+
+            # Add conditions to query
+            if conditions:
+                query += " AND " + " AND ".join(conditions)
+
+            # Add grouping if search query was used
+            if search_query:
+                query += " GROUP BY c.conversation_id"
+
+            # Order and pagination
+            query += " ORDER BY last_message_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            # Execute search query
+            cursor.execute(query, params)
+            conversations = [dict(row) for row in cursor.fetchall()]
+
+            # Remove search_content field if it exists
+            for conv in conversations:
+                conv.pop('search_content', None)
+
+            # Get total count for pagination
+            count_query = "SELECT COUNT(DISTINCT c.conversation_id) FROM conversations c"
+            if search_query:
+                count_query += " LEFT JOIN query_metrics qm ON c.conversation_id = qm.conversation_id"
+
+            count_query += " WHERE 1=1"
+
+            count_params = []
+            count_conditions = []
+
+            if search_query:
+                count_conditions.append("(qm.query_text LIKE ? OR qm.response_text LIKE ?)")
+                count_params.extend([search_term, search_term])
+
+            if start_date:
+                count_conditions.append("date(c.created_at) >= date(?)")
+                count_params.append(start_date)
+
+            if end_date:
+                count_conditions.append("date(c.created_at) <= date(?)")
+                count_params.append(end_date)
+
+            if count_conditions:
+                count_query += " AND " + " AND ".join(count_conditions)
+
+            cursor.execute(count_query, count_params)
+            total_count = cursor.fetchone()[0]
+
+            return {
+                "conversations": conversations,
+                "total": total_count,
+                "limit": limit,
+                "offset": offset
+            }
+
     def export_conversation(self, conversation_id: str, format: str = "json") -> str:
         """
         Export conversation to JSON or CSV format

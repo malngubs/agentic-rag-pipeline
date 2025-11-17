@@ -823,9 +823,80 @@
                 <h1>Conversation History</h1>
                 <button class="button" onclick="loadConversations()">🔄 Refresh</button>
             </div>
-            <div class="loading">
-                <div class="spinner"></div>
-                <p>Loading conversations...</p>
+
+            <!-- Search and Filters -->
+            <div class="status-card" style="margin-bottom: 20px;">
+                <div style="display: grid; grid-template-columns: 1fr auto auto auto; gap: 15px; align-items: end;">
+                    <!-- Search Input -->
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #2c3e50;">
+                            🔍 Search Conversations
+                        </label>
+                        <input
+                            type="text"
+                            id="conversation-search-input"
+                            placeholder="Search by keywords..."
+                            style="width: 100%; padding: 12px 15px; border: 2px solid #ecf0f1; border-radius: 8px; font-size: 14px;"
+                            onkeyup="handleConversationSearchKeyup(event)"
+                        >
+                    </div>
+
+                    <!-- Start Date Filter -->
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #2c3e50;">
+                            📅 Start Date
+                        </label>
+                        <input
+                            type="date"
+                            id="conversation-start-date"
+                            style="padding: 12px 15px; border: 2px solid #ecf0f1; border-radius: 8px; font-size: 14px;"
+                            onchange="searchConversations()"
+                        >
+                    </div>
+
+                    <!-- End Date Filter -->
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #2c3e50;">
+                            📅 End Date
+                        </label>
+                        <input
+                            type="date"
+                            id="conversation-end-date"
+                            style="padding: 12px 15px; border: 2px solid #ecf0f1; border-radius: 8px; font-size: 14px;"
+                            onchange="searchConversations()"
+                        >
+                    </div>
+
+                    <!-- Clear Filters Button -->
+                    <div>
+                        <button
+                            class="button button-secondary"
+                            onclick="clearConversationFilters()"
+                            style="padding: 12px 20px;">
+                            ✕ Clear
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Search Results Info -->
+                <div id="conversation-search-info" style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 6px; display: none;">
+                    <span id="conversation-search-results-text" style="color: #666; font-size: 14px;"></span>
+                </div>
+            </div>
+
+            <!-- Conversations Table -->
+            <div id="conversations-table-container">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Loading conversations...</p>
+                </div>
+            </div>
+
+            <!-- Pagination Controls -->
+            <div id="conversation-pagination" style="display: none; margin-top: 20px; text-align: center;">
+                <button class="button button-secondary" id="conv-prev-btn" onclick="changeConversationPage(-1)" style="margin-right: 10px;">← Previous</button>
+                <span id="conv-page-info" style="margin: 0 15px; color: #666; font-weight: 600;">Page 1</span>
+                <button class="button button-secondary" id="conv-next-btn" onclick="changeConversationPage(1)">Next →</button>
             </div>
         </div>
 
@@ -1321,16 +1392,93 @@
             }
         });
 
-        // Load conversations
+        // ===== CONVERSATION SEARCH FUNCTIONALITY =====
+
+        let conversationCurrentPage = 0;
+        let conversationSearchTimeout = null;
+        const CONVERSATION_PAGE_SIZE = 20;
+
+        // Load conversations (default view)
         async function loadConversations() {
-            const content = document.getElementById('conversations-content');
-            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading conversations...</p></div>';
+            conversationCurrentPage = 0;
+            await renderConversations();
+        }
+
+        // Search conversations with filters
+        async function searchConversations() {
+            conversationCurrentPage = 0;
+            await renderConversations();
+        }
+
+        // Handle keyup in search input (with debounce)
+        function handleConversationSearchKeyup(event) {
+            // Clear existing timeout
+            if (conversationSearchTimeout) {
+                clearTimeout(conversationSearchTimeout);
+            }
+
+            // Set new timeout for debounced search (300ms)
+            conversationSearchTimeout = setTimeout(() => {
+                searchConversations();
+            }, 300);
+
+            // Allow Enter key to trigger immediately
+            if (event.key === 'Enter') {
+                clearTimeout(conversationSearchTimeout);
+                searchConversations();
+            }
+        }
+
+        // Render conversations table
+        async function renderConversations() {
+            const container = document.getElementById('conversations-table-container');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading conversations...</p></div>';
+
+            const searchQuery = document.getElementById('conversation-search-input')?.value || '';
+            const startDate = document.getElementById('conversation-start-date')?.value || '';
+            const endDate = document.getElementById('conversation-end-date')?.value || '';
+
+            const offset = conversationCurrentPage * CONVERSATION_PAGE_SIZE;
 
             try {
-                const response = await fetch(`${API_BASE}/api/conversations?limit=50`);
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (searchQuery) params.append('q', searchQuery);
+                if (startDate) params.append('start_date', startDate);
+                if (endDate) params.append('end_date', endDate);
+                params.append('limit', CONVERSATION_PAGE_SIZE);
+                params.append('offset', offset);
+
+                // Use search endpoint if any filters are active
+                const hasFilters = searchQuery || startDate || endDate;
+                const endpoint = hasFilters
+                    ? `${API_BASE}/api/conversations/search?${params.toString()}`
+                    : `${API_BASE}/api/conversations?limit=${CONVERSATION_PAGE_SIZE}&offset=${offset}`;
+
+                const response = await fetch(endpoint);
                 const data = await response.json();
 
-                if (data.conversations && data.conversations.length > 0) {
+                const conversations = data.conversations || [];
+                const total = data.total || 0;
+
+                // Show search results info
+                if (hasFilters) {
+                    const infoDiv = document.getElementById('conversation-search-info');
+                    const infoText = document.getElementById('conversation-search-results-text');
+                    infoDiv.style.display = 'block';
+
+                    let filterDescriptions = [];
+                    if (searchQuery) filterDescriptions.push(`"${searchQuery}"`);
+                    if (startDate) filterDescriptions.push(`from ${startDate}`);
+                    if (endDate) filterDescriptions.push(`to ${endDate}`);
+
+                    infoText.textContent = `Found ${total} conversation(s) matching: ${filterDescriptions.join(', ')}`;
+                } else {
+                    document.getElementById('conversation-search-info').style.display = 'none';
+                }
+
+                // Render table
+                if (conversations.length > 0) {
                     let html = `
                         <div class="table-container">
                             <table>
@@ -1338,29 +1486,123 @@
                                     <tr>
                                         <th>Conversation ID</th>
                                         <th>Messages</th>
+                                        <th>Created</th>
                                         <th>Last Activity</th>
+                                        <th>Cost</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    ${data.conversations.map(conv => `
+                                    ${conversations.map(conv => `
                                         <tr>
-                                            <td><code>${conv.conversation_id.substring(0, 8)}...</code></td>
-                                            <td>${conv.message_count || 'N/A'}</td>
+                                            <td>
+                                                <code style="background: #f8f9fa; padding: 4px 8px; border-radius: 4px;">
+                                                    ${conv.conversation_id.substring(0, 12)}...
+                                                </code>
+                                            </td>
+                                            <td>${conv.message_count || 0}</td>
+                                            <td>${new Date(conv.created_at).toLocaleDateString()}</td>
                                             <td>${new Date(conv.last_message_at).toLocaleString()}</td>
+                                            <td>$${(conv.total_cost || 0).toFixed(4)}</td>
+                                            <td>
+                                                <button
+                                                    class="btn-small btn-view"
+                                                    onclick="viewConversationDetails('${conv.conversation_id}')"
+                                                    title="View full conversation">
+                                                    👁️ View
+                                                </button>
+                                            </td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
                             </table>
                         </div>
                     `;
-                    content.innerHTML = `<div class="header"><h1>Conversation History</h1><button class="button" onclick="loadConversations()">🔄 Refresh</button></div>${html}`;
+                    container.innerHTML = html;
+
+                    // Show pagination if there are multiple pages
+                    updateConversationPagination(total);
                 } else {
-                    content.innerHTML = '<div class="header"><h1>Conversation History</h1></div><div class="status-card"><p style="text-align: center; padding: 40px;">No conversations yet</p></div>';
+                    container.innerHTML = `
+                        <div class="status-card" style="text-align: center; padding: 60px;">
+                            <div style="font-size: 64px; margin-bottom: 20px;">💬</div>
+                            <h3 style="margin: 0 0 10px 0;">No conversations found</h3>
+                            <p style="color: #666; margin: 0;">
+                                ${hasFilters ? 'Try adjusting your search filters' : 'Start chatting to see conversation history'}
+                            </p>
+                        </div>
+                    `;
+                    document.getElementById('conversation-pagination').style.display = 'none';
                 }
+
             } catch (error) {
                 console.error('Failed to load conversations:', error);
-                content.innerHTML = '<div class="status-card"><p style="text-align: center; padding: 40px; color: #e74c3c;">Error loading conversations</p></div>';
+                container.innerHTML = `
+                    <div class="status-card" style="text-align: center; padding: 60px; color: #e74c3c;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">⚠️</div>
+                        <h3 style="margin: 0 0 10px 0;">Error loading conversations</h3>
+                        <p style="margin: 0;">${error.message || 'Unknown error'}</p>
+                    </div>
+                `;
             }
+        }
+
+        // Update pagination controls
+        function updateConversationPagination(totalConversations) {
+            const paginationDiv = document.getElementById('conversation-pagination');
+            const pageInfo = document.getElementById('conv-page-info');
+            const prevBtn = document.getElementById('conv-prev-btn');
+            const nextBtn = document.getElementById('conv-next-btn');
+
+            const totalPages = Math.ceil(totalConversations / CONVERSATION_PAGE_SIZE);
+            const currentPage = conversationCurrentPage + 1;
+
+            if (totalPages > 1) {
+                paginationDiv.style.display = 'block';
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages} (${totalConversations} total)`;
+
+                // Enable/disable buttons
+                prevBtn.disabled = conversationCurrentPage === 0;
+                nextBtn.disabled = conversationCurrentPage >= totalPages - 1;
+
+                prevBtn.style.opacity = prevBtn.disabled ? '0.5' : '1';
+                nextBtn.style.opacity = nextBtn.disabled ? '0.5' : '1';
+                prevBtn.style.cursor = prevBtn.disabled ? 'not-allowed' : 'pointer';
+                nextBtn.style.cursor = nextBtn.disabled ? 'not-allowed' : 'pointer';
+            } else {
+                paginationDiv.style.display = 'none';
+            }
+        }
+
+        // Change conversation page
+        function changeConversationPage(direction) {
+            conversationCurrentPage += direction;
+            if (conversationCurrentPage < 0) conversationCurrentPage = 0;
+            renderConversations();
+        }
+
+        // Clear all search filters
+        function clearConversationFilters() {
+            document.getElementById('conversation-search-input').value = '';
+            document.getElementById('conversation-start-date').value = '';
+            document.getElementById('conversation-end-date').value = '';
+            document.getElementById('conversation-search-info').style.display = 'none';
+            conversationCurrentPage = 0;
+            renderConversations();
+        }
+
+        // View conversation details (placeholder - can be enhanced)
+        function viewConversationDetails(conversationId) {
+            // For now, just show an alert with the conversation ID
+            // In a full implementation, this would open a modal with the full conversation
+            alert(`View conversation: ${conversationId}\n\nThis feature will show the full conversation history with all messages.`);
+
+            // TODO: Implement full conversation view modal
+            // You could add this enhancement later with a modal showing:
+            // - All messages in the conversation
+            // - Timestamps
+            // - Query/response pairs
+            // - Associated costs
         }
 
         // ===== ENHANCED ANALYTICS WITH CHARTS =====

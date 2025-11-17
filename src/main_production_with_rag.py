@@ -1276,11 +1276,11 @@ async def get_conversations(limit: int = 50, offset: int = 0):
     """Get conversation history from analytics database"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         conversations = app_state.analytics_db.get_all_conversations(limit=limit, offset=offset)
         total = app_state.analytics_db.get_total_conversations()
-        
+
         return ConversationHistoryResponse(
             conversations=conversations,
             total=total
@@ -1288,6 +1288,45 @@ async def get_conversations(limit: int = 50, offset: int = 0):
     except Exception as e:
         logger.error(f"Failed to get conversations: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve conversations: {str(e)}")
+
+@app.get("/api/conversations/search")
+async def search_conversations(
+    q: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    Search conversations by keyword and/or date range
+
+    Args:
+        q: Search query (searches in both query and response text)
+        start_date: Filter by start date (YYYY-MM-DD format)
+        end_date: Filter by end date (YYYY-MM-DD format)
+        limit: Maximum results to return (default 50)
+        offset: Offset for pagination (default 0)
+
+    Returns:
+        Dictionary with conversations list, total count, and pagination info
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        result = app_state.analytics_db.search_conversations(
+            search_query=q,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset
+        )
+
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        logger.error(f"Failed to search conversations: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
 async def get_analytics_summary():
