@@ -1340,6 +1340,59 @@
 
         // ===== END AUTHENTICATION =====
 
+        // Helper function for authenticated API requests
+        function authFetch(url, options = {}) {
+            const headers = {
+                ...options.headers,
+                'Authorization': `Bearer ${authToken}`
+            };
+
+            return fetch(url, {
+                ...options,
+                headers
+            });
+        }
+
+        // Display current user info in sidebar
+        function displayUserInfo() {
+            if (currentUser) {
+                const sidebar = document.querySelector('.sidebar-header');
+                const userInfo = document.createElement('div');
+                userInfo.style.cssText = 'margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px;';
+                userInfo.innerHTML = `
+                    <div style="color: rgba(255,255,255,0.7);">Logged in as:</div>
+                    <div style="color: white; font-weight: 600; margin-top: 5px;">${currentUser.full_name}</div>
+                    <div style="color: rgba(255,255,255,0.5); margin-top: 3px;">${currentUser.email}</div>
+                    <div style="margin-top: 8px;">
+                        <span style="background: ${getRoleBadgeColor(currentUser.role)}; color: white; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase;">
+                            ${currentUser.role}
+                        </span>
+                    </div>
+                `;
+                sidebar.appendChild(userInfo);
+            }
+        }
+
+        function getRoleBadgeColor(role) {
+            const colors = {
+                'admin': '#e74c3c',
+                'editor': '#3498db',
+                'viewer': '#95a5a6'
+            };
+            return colors[role] || '#95a5a6';
+        }
+
+        // Check permissions
+        function hasPermission(requiredRole) {
+            const roleHierarchy = { 'viewer': 0, 'editor': 1, 'admin': 2 };
+            const userLevel = roleHierarchy[currentUser?.role] || -1;
+            const requiredLevel = roleHierarchy[requiredRole] || 999;
+            return userLevel >= requiredLevel;
+        }
+
+        // Display user info
+        displayUserInfo();
+
         // Section Navigation
         function showSection(section) {
             // Hide all sections
@@ -1372,7 +1425,7 @@
             showAlert('info', `📤 Uploading ${file.name}...`);
 
             try {
-                const response = await fetch(`${API_BASE}/api/upload`, {
+                const response = await authFetch(`${API_BASE}/api/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -1553,7 +1606,7 @@
                 const formData = new FormData();
                 formData.append('file', file);
 
-                const response = await fetch(`${API_BASE}/api/upload`, {
+                const response = await authFetch(`${API_BASE}/api/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -1690,7 +1743,7 @@
             resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading conversations...</p></div>';
 
             try {
-                const response = await fetch(`${API_BASE}/api/conversations?limit=50`);
+                const response = await authFetch(`${API_BASE}/api/conversations?limit=50`);
                 const data = await response.json();
 
                 renderConversations(data.conversations, data.total);
@@ -1720,7 +1773,7 @@
                 if (endDate) params.append('end_date', endDate);
                 params.append('limit', '50');
 
-                const response = await fetch(`${API_BASE}/api/conversations/search?${params.toString()}`);
+                const response = await authFetch(`${API_BASE}/api/conversations/search?${params.toString()}`);
                 const data = await response.json();
 
                 renderConversations(data.conversations, data.total, true);
@@ -1819,7 +1872,7 @@
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading conversations...</p></div>';
 
             try {
-                const response = await fetch(`${API_BASE}/api/conversations?limit=50`);
+                const response = await authFetch(`${API_BASE}/api/conversations?limit=50`);
                 const data = await response.json();
 
                 if (data.conversations && data.conversations.length > 0) {
@@ -1865,15 +1918,15 @@
 
             try {
                 // Load summary data
-                const summaryResponse = await fetch(`${API_BASE}/api/analytics/summary`);
+                const summaryResponse = await authFetch(`${API_BASE}/api/analytics/summary`);
                 const data = await summaryResponse.json();
 
                 // Load daily stats for charts
-                const statsResponse = await fetch(`${API_BASE}/api/analytics/daily-stats?days=30`);
+                const statsResponse = await authFetch(`${API_BASE}/api/analytics/daily-stats?days=30`);
                 const statsData = await statsResponse.json();
 
                 // Load cost breakdown
-                const costResponse = await fetch(`${API_BASE}/api/analytics/cost-breakdown?days=30`);
+                const costResponse = await authFetch(`${API_BASE}/api/analytics/cost-breakdown?days=30`);
                 const costData = await costResponse.json();
 
                 if (data) {
@@ -2182,7 +2235,7 @@
                 const dailyBudget = 10.0;  // $10 per day
                 const monthlyBudget = 300.0;  // $300 per month
 
-                const response = await fetch(`${API_BASE}/api/analytics/budget-alert?daily_budget=${dailyBudget}&monthly_budget=${monthlyBudget}`);
+                const response = await authFetch(`${API_BASE}/api/analytics/budget-alert?daily_budget=${dailyBudget}&monthly_budget=${monthlyBudget}`);
                 const data = await response.json();
 
                 // Show the alerts section

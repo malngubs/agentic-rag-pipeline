@@ -256,14 +256,29 @@ class AuthManager:
             ]
 
 
+# Global auth manager instance (will be set by app)
+_auth_manager_instance: Optional[AuthManager] = None
+
+
+def set_auth_manager(auth_manager: AuthManager):
+    """Set global auth manager instance"""
+    global _auth_manager_instance
+    _auth_manager_instance = auth_manager
+
+
+def get_auth_manager() -> AuthManager:
+    """Get global auth manager instance"""
+    if not _auth_manager_instance:
+        raise HTTPException(status_code=500, detail="Auth manager not initialized")
+    return _auth_manager_instance
+
+
 # Dependency for protected routes
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    auth_manager: AuthManager = None
+    credentials: HTTPAuthorizationCredentials = Security(security)
 ) -> UserResponse:
     """Dependency to get current authenticated user"""
-    if not auth_manager:
-        raise HTTPException(status_code=500, detail="Auth manager not initialized")
+    auth_manager = get_auth_manager()
 
     token = credentials.credentials
     payload = auth_manager.decode_token(token)
@@ -277,21 +292,42 @@ async def get_current_user(
     return user
 
 
-# Role-based permissions
-async def require_role(required_role: str):
-    """Dependency to require specific role"""
-    async def role_checker(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
-        role_hierarchy = {"viewer": 0, "editor": 1, "admin": 2}
+# Optional authentication (for endpoints that work with or without auth)
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False)
+) -> Optional[UserResponse]:
+    """Optional authentication - returns None if not authenticated"""
+    if not credentials:
+        return None
 
-        user_level = role_hierarchy.get(current_user.role, -1)
-        required_level = role_hierarchy.get(required_role, 999)
+    try:
+        return await get_current_user(credentials)
+    except HTTPException:
+        return None
+
+
+# Role-based permission checker
+class RoleChecker:
+    """Dependency class to check user roles"""
+
+    def __init__(self, required_role: str):
+        self.required_role = required_role
+        self.role_hierarchy = {"viewer": 0, "editor": 1, "admin": 2}
+
+    async def __call__(self, current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
+        user_level = self.role_hierarchy.get(current_user.role, -1)
+        required_level = self.role_hierarchy.get(self.required_role, 999)
 
         if user_level < required_level:
             raise HTTPException(
                 status_code=403,
-                detail=f"Insufficient permissions. Required role: {required_role}"
+                detail=f"Insufficient permissions. Required: {self.required_role}, Current: {current_user.role}"
             )
 
         return current_user
 
-    return role_checker
+
+# Convenience role checkers
+require_viewer = RoleChecker("viewer")
+require_editor = RoleChecker("editor")
+require_admin = RoleChecker("admin")

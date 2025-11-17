@@ -43,7 +43,11 @@ except ImportError:
     logging.warning("⚠️ source_citations.py not found - enhanced citations disabled")
 
 try:
-    from auth import AuthManager, UserCreate, UserLogin, TokenResponse, UserResponse, get_current_user
+    from auth import (
+        AuthManager, UserCreate, UserLogin, TokenResponse, UserResponse,
+        get_current_user, get_current_user_optional, set_auth_manager,
+        require_viewer, require_editor, require_admin, RoleChecker
+    )
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False
@@ -217,6 +221,7 @@ class ApplicationState:
         if AUTH_AVAILABLE:
             try:
                 self.auth_manager = AuthManager(db_path="data/auth.db")
+                set_auth_manager(self.auth_manager)  # Set global instance
                 logger.info("✅ Authentication system initialized: data/auth.db")
             except Exception as e:
                 logger.error(f"❌ Authentication system initialization failed: {e}")
@@ -642,17 +647,14 @@ async def login(credentials: UserLogin):
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
-async def get_current_user_info(current_user: UserResponse = Depends(lambda: get_current_user(auth_manager=app_state.auth_manager))):
+async def get_current_user_info(current_user: UserResponse = Depends(get_current_user)):
     """Get current authenticated user info"""
     return current_user
 
 
 @app.get("/api/auth/users", response_model=List[UserResponse])
-async def list_users(current_user: UserResponse = Depends(lambda: get_current_user(auth_manager=app_state.auth_manager))):
+async def list_users(current_user: UserResponse = Depends(require_admin)):
     """List all users (admin only)"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     if not app_state.auth_manager:
         raise HTTPException(status_code=503, detail="Authentication not available")
 
@@ -664,10 +666,13 @@ async def list_users(current_user: UserResponse = Depends(lambda: get_current_us
 # =============================================================================
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
-    """Enhanced document upload with Phase 1 analytics logging"""
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(require_editor)
+):
+    """Enhanced document upload with Phase 1 analytics logging (requires editor role)"""
     start_time = time.time()
-    logger.info(f"📤 Upload request received: {file.filename}")
+    logger.info(f"📤 Upload request received: {file.filename} by {current_user.email}")
     
     try:
         # Validation
@@ -1310,8 +1315,12 @@ async def transcribe_audio(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations", response_model=ConversationHistoryResponse)
-async def get_conversations(limit: int = 50, offset: int = 0):
-    """Get conversation history from analytics database"""
+async def get_conversations(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: UserResponse = Depends(require_viewer)
+):
+    """Get conversation history from analytics database (requires authentication)"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
 
@@ -1358,8 +1367,8 @@ async def search_conversations(
         raise HTTPException(status_code=500, detail=f"Failed to search conversations: {str(e)}")
 
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
-async def get_analytics_summary():
-    """Get analytics summary"""
+async def get_analytics_summary(current_user: UserResponse = Depends(require_viewer)):
+    """Get analytics summary (requires authentication)"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
     
@@ -1384,9 +1393,13 @@ async def get_analytics_summary():
         raise HTTPException(status_code=500, detail=f"Failed to retrieve analytics: {str(e)}")
 
 @app.get("/api/analytics/budget-alert")
-async def get_budget_alert(daily_budget: float = 10.0, monthly_budget: float = 300.0):
+async def get_budget_alert(
+    daily_budget: float = 10.0,
+    monthly_budget: float = 300.0,
+    current_user: UserResponse = Depends(require_viewer)
+):
     """
-    Get budget alert status
+    Get budget alert status (requires authentication)
     Checks current spending against daily and monthly budgets
     """
     if not app_state.analytics_db:
@@ -1400,9 +1413,9 @@ async def get_budget_alert(daily_budget: float = 10.0, monthly_budget: float = 3
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/cost-breakdown")
-async def get_cost_breakdown(days: int = 30):
+async def get_cost_breakdown(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
     """
-    Get detailed cost breakdown by model and time period
+    Get detailed cost breakdown by model and time period (requires authentication)
     Provides granular cost analysis for the specified number of days
     """
     if not app_state.analytics_db:
@@ -1416,9 +1429,9 @@ async def get_cost_breakdown(days: int = 30):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/daily-stats")
-async def get_daily_stats(days: int = 30):
+async def get_daily_stats(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
     """
-    Get daily statistics for time-series charts
+    Get daily statistics for time-series charts (requires authentication)
     """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
