@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+import json
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
@@ -308,9 +309,10 @@ app.add_middleware(
 # =============================================================================
 
 def setup_static_files():
-    """Setup static file serving"""
+    """Setup static file serving for frontend assets"""
     try:
-        possible_paths = [
+        # Mount frontend directory for HTML files
+        possible_frontend_paths = [
             Path("../frontend"),
             Path("frontend"), 
             Path("./frontend"),
@@ -318,17 +320,40 @@ def setup_static_files():
         ]
         
         frontend_path = None
-        for path in possible_paths:
+        for path in possible_frontend_paths:
             if path.exists():
                 frontend_path = path
                 break
         
         if frontend_path:
             app.mount("/frontend", StaticFiles(directory=str(frontend_path)), name="frontend")
-            logger.info(f"✅ Static files mounted from: {frontend_path.absolute()}")
+            logger.info(f"✅ Frontend files mounted from: {frontend_path.absolute()}")
+        
+        # Mount static directory for JavaScript files
+        possible_static_paths = [
+            Path("../static"),
+            Path("static"),
+            Path("./static"),
+            Path(__file__).parent.parent / "static",
+        ]
+        
+        static_path = None
+        for path in possible_static_paths:
+            if path.exists():
+                static_path = path
+                break
+        
+        if static_path:
+            app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+            logger.info(f"✅ Static files mounted from: {static_path.absolute()}")
             return True
         else:
-            logger.warning("⚠️ Frontend directory not found")
+            logger.warning("⚠️ Static directory not found - creating it now")
+            static_dir = Path("./static")
+            static_dir.mkdir(exist_ok=True)
+            app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+            logger.info(f"📁 Created and mounted static directory: {static_dir.absolute()}")
+            logger.info("⚠️ Please place macrocomm-bubble.js in the static/ directory")
             return False
             
     except Exception as e:
@@ -342,7 +367,7 @@ setup_static_files()
 # 📍 CORE API ROUTES
 # =============================================================================
 
-@app.get("/", response_class=JSONResponse)
+@app.get("/api/info", response_class=JSONResponse)
 async def root():
     """API root endpoint"""
     return {
@@ -384,6 +409,60 @@ async def root():
 async def favicon():
     """Serve favicon to prevent 404 errors"""
     return Response(status_code=204)
+
+# =============================================================================
+# 🌐 HTML SERVING ROUTES - Production Frontend
+# =============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    """Serve the main index.html page"""
+    try:
+        possible_paths = [
+            Path("../index.html"),
+            Path("index.html"),
+            Path("./index.html"),
+            Path(__file__).parent / "index.html",
+            Path(__file__).parent.parent / "index.html"
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return HTMLResponse(content=f.read())
+        
+        raise HTTPException(status_code=404, detail="Index page not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving index.html: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin.html", response_class=HTMLResponse)
+async def serve_admin():
+    """Serve the admin portal page"""
+    try:
+        possible_paths = [
+            Path("../admin.html"),
+            Path("admin.html"),
+            Path("./admin.html"),
+            Path(__file__).parent / "admin.html",
+            Path(__file__).parent.parent / "admin.html"
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return HTMLResponse(content=f.read())
+        
+        raise HTTPException(status_code=404, detail="Admin page not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving admin.html: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -647,19 +726,47 @@ async def chat_endpoint(message: ChatMessage):
             "context_found": context_found
         })
         
-        # ✨ PHASE 1: Log to analytics database
+        # ✨ PHASE 1: Log to analytics database with proper metrics
         if app_state.analytics_db:
             try:
-                app_state.analytics_db.log_query(
+                from analytics_database import QueryMetrics, calculate_openai_cost
+                import uuid as uuid_lib
+                
+                # Extract token usage from RAG result if available
+                token_usage = rag_result.get('token_usage', {})
+                input_tokens = token_usage.get('input_tokens', 0)
+                output_tokens = token_usage.get('output_tokens', 0)
+                
+                # If no token usage, estimate (rough approximation)
+                if input_tokens == 0:
+                    input_tokens = int(len(message.message.split()) * 1.3)
+                if output_tokens == 0:
+                    output_tokens = int(len(response_text.split()) * 1.3)
+                
+                # Calculate cost
+                cost = calculate_openai_cost(input_tokens, output_tokens, "gpt-4o-mini")
+                
+                # Create metrics object
+                metrics = QueryMetrics(
+                    query_id=str(uuid_lib.uuid4()),
                     conversation_id=conversation_id,
-                    user_message=message.message,
-                    assistant_message=response_text,
+                    query_text=message.message,
+                    response_text=response_text,
+                    timestamp=datetime.now(),
                     response_time=response_time,
                     using_rag=using_rag,
                     context_found=context_found,
                     confidence=confidence,
-                    sources=sources
+                    sources=sources,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                    model_used="gpt-4o-mini",
+                    success=True
                 )
+                
+                # Record metrics
+                app_state.analytics_db.record_query_metrics(metrics)
             except Exception as e:
                 logger.warning(f"Failed to log to analytics: {e}")
         
@@ -761,19 +868,45 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                     response_time = time.time() - start_time
                     
-                    # ✨ PHASE 1: Log to analytics
+                    # ✨ PHASE 1: Log to analytics with proper metrics
                     if app_state.analytics_db:
                         try:
-                            app_state.analytics_db.log_query(
+                            from analytics_database import QueryMetrics, calculate_openai_cost
+                            import uuid as uuid_lib
+                            
+                            # Extract token usage from RAG result if available
+                            token_usage = rag_result.get('token_usage', {})
+                            input_tokens = token_usage.get('input_tokens', 0)
+                            output_tokens = token_usage.get('output_tokens', 0)
+                            
+                            # If no token usage, estimate
+                            if input_tokens == 0:
+                                input_tokens = int(len(message.split()) * 1.3)
+                            if output_tokens == 0:
+                                output_tokens = int(len(response_text.split()) * 1.3)
+                            
+                            # Calculate cost
+                            cost = calculate_openai_cost(input_tokens, output_tokens, "gpt-4o-mini")
+                            
+                            # Create and record metrics
+                            metrics = QueryMetrics(
+                                query_id=str(uuid_lib.uuid4()),
                                 conversation_id=conversation_id,
-                                user_message=message,
-                                assistant_message=response_text,
+                                query_text=message,
+                                response_text=response_text,
+                                timestamp=datetime.now(),
                                 response_time=response_time,
                                 using_rag=using_rag,
                                 context_found=context_found,
                                 confidence=confidence,
-                                sources=sources
+                                sources=sources,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                cost=cost,
+                                model_used="gpt-4o-mini",
+                                success=True
                             )
+                            app_state.analytics_db.record_query_metrics(metrics)
                         except Exception as e:
                             logger.warning(f"Failed to log to analytics: {e}")
                     
@@ -808,9 +941,241 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         app_state.connection_manager.disconnect(websocket)
 
+
+@app.websocket("/ws/chat/stream")
+async def websocket_streaming_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint with STREAMING responses - FIXED ASYNC VERSION
+    """
+    client_info = {
+        "client_host": websocket.client.host if websocket.client else "unknown",
+        "connected_at": time.time()
+    }
+    
+    try:
+        await app_state.connection_manager.connect(websocket, client_info)
+        
+        # Send welcome message
+        rag_available = app_state.rag_status.get('initialized', False)
+        welcome_msg = "🚀 Streaming chat connected! Responses will appear in real-time." + (
+            " RAG system ready." if rag_available 
+            else " RAG system not available."
+        )
+        
+        await websocket.send_json({
+            "type": "system",
+            "message": welcome_msg,
+            "rag_available": rag_available,
+            "timestamp": time.time()
+        })
+        
+        while True:
+            data = await websocket.receive_json()
+            
+            if data.get("type") == "chat":
+                message = data.get("message", "")
+                conversation_id = data.get("conversation_id") or str(uuid.uuid4())
+                
+                try:
+                    start_time = time.time()
+                    
+                    # Step 1: Send "thinking" indicator
+                    await websocket.send_json({
+                        "type": "thinking",
+                        "conversation_id": conversation_id,
+                        "timestamp": time.time()
+                    })
+                    
+                    # Step 2: Get context from RAG (if available)
+                    search_results = []
+                    context_texts = []
+                    sources = []
+                    citations = []
+                    using_rag = False
+                    context_found = 0
+                    
+                    if app_state.rag_status.get('initialized', False):
+                        # Search for relevant context
+                        search_results = await app_state.rag_system.vector_store.search(
+                            message,
+                            limit=app_state.rag_system.config.max_context_chunks,
+                            score_threshold=app_state.rag_system.config.confidence_threshold
+                        )
+                        
+                        if search_results:
+                            context_texts = [r["text"] for r in search_results]
+                            sources = [r["source"] for r in search_results]
+                            context_found = len(search_results)
+                            using_rag = True
+                            
+                            # Build citations (with error handling)
+                            if app_state.citation_builder:
+                                try:
+                                    citations = app_state.citation_builder.build_citations(search_results)
+                                except Exception as e:
+                                    logger.warning(f"Citation building failed: {e}")
+                    
+                    # Step 3: Build the prompt
+                    if context_texts:
+                        context_block = "\n\n".join([f"Context {i+1}:\n{ctx}" for i, ctx in enumerate(context_texts)])
+                        prompt = f"""You are a helpful AI assistant. Use the following context to answer the user's question.
+
+CONTEXT:
+{context_block}
+
+USER QUESTION: {message}
+
+Provide a clear, accurate answer based on the context. If the context doesn't contain relevant information, say so politely."""
+                    else:
+                        prompt = f"You are a helpful AI assistant. Answer this question: {message}"
+                    
+                    # Step 4: Stream the response - FIXED ASYNC VERSION
+                    full_response = ""
+                    
+                    try:
+                        # Create the streaming request in a thread executor
+                        def create_stream():
+                            return app_state.rag_system.llm_manager.client.chat.completions.create(
+                                model=app_state.rag_system.config.openai_model,
+                                messages=[{"role": "user", "content": prompt}],
+                                max_tokens=app_state.rag_system.config.max_tokens,
+                                temperature=app_state.rag_system.config.temperature,
+                                stream=True
+                            )
+                        
+                        # Get the stream object
+                        stream = await asyncio.get_event_loop().run_in_executor(None, create_stream)
+                        
+                        # Stream tokens to client
+                        for chunk in stream:
+                            if chunk.choices[0].delta.content:
+                                token = chunk.choices[0].delta.content
+                                full_response += token
+                                
+                                # Send token immediately
+                                await websocket.send_json({
+                                    "type": "stream_token",
+                                    "token": token,
+                                    "conversation_id": conversation_id,
+                                    "timestamp": time.time()
+                                })
+                                
+                                # Small delay for smooth visual effect
+                                await asyncio.sleep(0.01)
+                    
+                    except Exception as e:
+                        logger.error(f"Streaming failed: {e}")
+                        full_response = "I encountered an error processing your request. Please try again."
+                        await websocket.send_json({
+                            "type": "stream_token",
+                            "token": full_response,
+                            "conversation_id": conversation_id,
+                            "timestamp": time.time()
+                        })
+                    
+                    response_time = time.time() - start_time
+                    
+                    # Step 5: Generate follow-up questions - FIXED ASYNC VERSION
+                    follow_ups = []
+                    if app_state.rag_status.get('initialized', False) and search_results:
+                        try:
+                            follow_ups = await app_state.rag_system.generate_follow_up_questions(
+                                message, full_response, search_results
+                            )
+                        except Exception as e:
+                            logger.warning(f"Follow-up generation failed: {e}")
+                            # Provide default follow-ups
+                            follow_ups = [
+                                "Can you tell me more about this?",
+                                "What else should I know?",
+                                "Are there any related topics?"
+                            ]
+                    
+                    # Step 6: Send completion message
+                    await websocket.send_json({
+                        "type": "stream_complete",
+                        "conversation_id": conversation_id,
+                        "response_time": response_time,
+                        "timestamp": time.time(),
+                        "using_rag": using_rag,
+                        "sources": list(set(sources)),
+                        "context_found": context_found,
+                        "confidence": 0.8 if context_found > 0 else 0.5,
+                        "citations": citations,
+                        "follow_up_questions": follow_ups
+                    })
+                    
+                    # Step 7: Log to analytics
+                    if app_state.analytics_db:
+                        try:
+                            from analytics_database import QueryMetrics, calculate_openai_cost
+                            
+                            input_tokens = int(len(message.split()) * 1.3) + int(sum(len(ctx.split()) for ctx in context_texts) * 1.3)
+                            output_tokens = int(len(full_response.split()) * 1.3)
+                            cost = calculate_openai_cost(input_tokens, output_tokens, "gpt-4o-mini")
+                            
+                            metrics = QueryMetrics(
+                                query_id=str(uuid.uuid4()),
+                                conversation_id=conversation_id,
+                                query_text=message,
+                                response_text=full_response,
+                                timestamp=datetime.now(),
+                                response_time=response_time,
+                                using_rag=using_rag,
+                                context_found=context_found,
+                                confidence=0.8 if context_found > 0 else 0.5,
+                                sources=sources,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                cost=cost,
+                                model_used="gpt-4o-mini",
+                                success=True
+                            )
+                            app_state.analytics_db.record_query_metrics(metrics)
+                        except Exception as e:
+                            logger.warning(f"Analytics logging failed: {e}")
+                    
+                except Exception as e:
+                    logger.error(f"WebSocket streaming failed: {e}\n{traceback.format_exc()}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "I encountered an error processing your request. Please try again.",
+                        "timestamp": time.time()
+                    })
+    
+    except WebSocketDisconnect:
+        app_state.connection_manager.disconnect(websocket)
+        logger.info("Streaming WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        app_state.connection_manager.disconnect(websocket)
+
 # =============================================================================
 # ✨ PHASE 1: ANALYTICS & CONVERSATION ENDPOINTS
 # =============================================================================
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(request: Request):
+    """
+    Transcribe audio to text (for voice input feature)
+    Note: This endpoint receives audio data and returns transcribed text
+    In production, you'd use OpenAI Whisper or similar service
+    """
+    try:
+        # For now, return a placeholder response
+        # In production, integrate with OpenAI Whisper API:
+        # audio_file = await request.body()
+        # transcript = openai.Audio.transcribe("whisper-1", audio_file)
+        # return {"text": transcript.text}
+        
+        return JSONResponse({
+            "text": "Voice transcription endpoint ready (integrate Whisper API for production)",
+            "status": "placeholder"
+        })
+    except Exception as e:
+        logger.error(f"Transcription failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations", response_model=ConversationHistoryResponse)
 async def get_conversations(limit: int = 50, offset: int = 0):
@@ -819,7 +1184,7 @@ async def get_conversations(limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=503, detail="Analytics not available")
     
     try:
-        conversations = app_state.analytics_db.get_conversations(limit=limit, offset=offset)
+        conversations = app_state.analytics_db.get_all_conversations(limit=limit, offset=offset)
         total = app_state.analytics_db.get_total_conversations()
         
         return ConversationHistoryResponse(
@@ -837,23 +1202,79 @@ async def get_analytics_summary():
         raise HTTPException(status_code=503, detail="Analytics not available")
     
     try:
-        summary = app_state.analytics_db.get_summary_stats()
+        # Get analytics summary (returns AnalyticsSummary dataclass)
+        summary_obj = app_state.analytics_db.get_analytics_summary(days=30)
         
         # Get RAG system stats
         rag_status = await app_state.rag_system.get_system_status()
         
         return AnalyticsSummaryResponse(
-            total_queries=summary.get('total_queries', 0),
-            total_conversations=summary.get('total_conversations', 0),
-            avg_response_time=summary.get('avg_response_time', 0.0),
-            total_cost=summary.get('total_cost', 0.0),
+            total_queries=summary_obj.total_queries,
+            total_conversations=summary_obj.total_conversations,
+            avg_response_time=summary_obj.avg_response_time,
+            total_cost=summary_obj.total_cost,
             total_documents=rag_status.get('documents_indexed', 0),
             total_chunks=rag_status.get('total_chunks', 0),
-            success_rate=summary.get('success_rate', 0.0)
+            success_rate=summary_obj.success_rate
         )
     except Exception as e:
         logger.error(f"Failed to get analytics summary: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve analytics: {str(e)}")
+
+@app.get("/api/analytics/budget-alert")
+async def get_budget_alert(daily_budget: float = 10.0, monthly_budget: float = 300.0):
+    """
+    Get budget alert status
+    Checks current spending against daily and monthly budgets
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+    
+    try:
+        alert = app_state.analytics_db.get_budget_alert(daily_budget, monthly_budget)
+        return JSONResponse(content=alert)
+    except Exception as e:
+        logger.error(f"Failed to get budget alert: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics/cost-breakdown")
+async def get_cost_breakdown(days: int = 30):
+    """
+    Get detailed cost breakdown by model and time period
+    Provides granular cost analysis for the specified number of days
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+    
+    try:
+        breakdown = app_state.analytics_db.get_cost_breakdown(days=days)
+        return JSONResponse(content=breakdown)
+    except Exception as e:
+        logger.error(f"Failed to get cost breakdown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conversations/{conversation_id}/export")
+async def export_conversation(conversation_id: str, format: str = "json"):
+    """
+    Export individual conversation in JSON or CSV format
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+    
+    try:
+        if format.lower() == "csv":
+            data = app_state.analytics_db.export_conversation(conversation_id, format="csv")
+            return Response(
+                content=data,
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=conversation_{conversation_id}.csv"}
+            )
+        else:
+            data = app_state.analytics_db.export_conversation(conversation_id, format="json")
+            return JSONResponse(content=json.loads(data))
+    except Exception as e:
+        logger.error(f"Failed to export conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/export")
 async def export_analytics(format: str = "json"):

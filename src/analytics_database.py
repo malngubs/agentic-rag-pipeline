@@ -763,6 +763,72 @@ class AnalyticsDatabase:
             }
     
     # =========================================================================
+    
+    def get_total_conversations(self) -> int:
+        """
+        Get total number of conversations in the database
+        
+        Returns:
+            Total count of conversations
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as total FROM conversations")
+            result = cursor.fetchone()
+            return result['total'] if result else 0
+    
+    def export_to_json(self) -> dict:
+        """
+        Export all analytics data as JSON for global analytics export
+        
+        Returns:
+            Dictionary with comprehensive analytics data
+        """
+        summary = self.get_analytics_summary(days=30)
+        conversations = self.get_all_conversations(limit=1000)
+        cost_breakdown = self.get_cost_breakdown(days=30)
+        
+        return {
+            "summary": asdict(summary),
+            "conversations": conversations,
+            "cost_breakdown": cost_breakdown,
+            "exported_at": datetime.now().isoformat(),
+            "export_type": "global_analytics"
+        }
+    
+    def export_to_csv(self) -> str:
+        """
+        Export analytics summary as CSV for global analytics export
+        
+        Returns:
+            CSV formatted string with analytics summary
+        """
+        import csv
+        import io
+        
+        summary = self.get_analytics_summary(days=30)
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write summary statistics
+        writer.writerow(["Metric", "Value"])
+        writer.writerow(["Total Queries", summary.total_queries])
+        writer.writerow(["Total Conversations", summary.total_conversations])
+        writer.writerow(["Avg Response Time (s)", round(summary.avg_response_time, 3)])
+        writer.writerow(["Total Cost ($)", round(summary.total_cost, 4)])
+        writer.writerow(["Success Rate (%)", round(summary.success_rate, 2)])
+        writer.writerow(["Avg Confidence", round(summary.avg_confidence, 2)])
+        writer.writerow(["RAG Usage Rate (%)", round(summary.rag_usage_rate, 2)])
+        writer.writerow([])
+        
+        # Write cost per day data
+        writer.writerow(["Date", "Total Cost", "Total Queries"])
+        for day_data in summary.cost_per_day:
+            writer.writerow([day_data['date'], day_data['cost'], day_data['queries']])
+        
+        return output.getvalue()
+
     # 🧹 CLEANUP METHODS
     # =========================================================================
     

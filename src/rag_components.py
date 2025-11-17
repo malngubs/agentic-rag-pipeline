@@ -20,6 +20,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import hashlib
 import uuid
+import json
 
 # Core ML/AI Libraries
 import numpy as np
@@ -147,9 +148,14 @@ class WorkingMemory:
 class DocumentMetadataManager:
     """Manages metadata for all indexed documents"""
     
-    def __init__(self):
+    def __init__(self, storage_file: str = "data/document_metadata.json"):
         self.logger = logging.getLogger(__name__)
+        self.storage_file = Path(storage_file)
         self.documents: Dict[str, DocumentMetadata] = {}
+
+        # ensure storage directory exists and load any existing metadata
+        self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_from_disk()
     
     def add_document(self, doc_id: str, filename: str, file_type: str, 
                      file_size: int, chunk_count: int, status: str = "indexed") -> DocumentMetadata:
@@ -164,6 +170,7 @@ class DocumentMetadataManager:
             status=status
         )
         self.documents[doc_id] = metadata
+        self._save_to_disk()
         self.logger.info(f"📝 Added document metadata: {filename} (ID: {doc_id})")
         return metadata
     
@@ -179,6 +186,7 @@ class DocumentMetadataManager:
         """Delete document metadata"""
         if doc_id in self.documents:
             del self.documents[doc_id]
+            self._save_to_disk()
             self.logger.info(f"🗑️ Deleted document metadata: {doc_id}")
             return True
         return False
@@ -189,6 +197,7 @@ class DocumentMetadataManager:
             self.documents[doc_id].status = status
             if error_message:
                 self.documents[doc_id].error_message = error_message
+            self._save_to_disk()
     
     def get_total_chunks(self) -> int:
         """Get total number of chunks across all documents"""
@@ -197,6 +206,40 @@ class DocumentMetadataManager:
     def get_documents_by_status(self, status: str) -> List[DocumentMetadata]:
         """Get documents filtered by status"""
         return [doc for doc in self.documents.values() if doc.status == status]
+
+    def _load_from_disk(self):
+        """Load document metadata from disk"""
+        try:
+            if self.storage_file.exists():
+                with open(self.storage_file, 'r') as f:
+                    data = json.load(f)
+                    for doc_id, doc_data in data.items():
+                        doc_data['upload_date'] = datetime.fromisoformat(doc_data['upload_date'])
+                        self.documents[doc_id] = DocumentMetadata(**doc_data)
+                self.logger.info(f"📂 Loaded {len(self.documents)} documents from disk")
+        except Exception as e:
+            self.logger.warning(f"Could not load documents from disk: {e}")
+
+    def _save_to_disk(self):
+        """Save document metadata to disk"""
+        try:
+            data = {}
+            for doc_id, doc in self.documents.items():
+                doc_dict = {
+                    'doc_id': doc.doc_id,
+                    'filename': doc.filename,
+                    'file_type': doc.file_type,
+                    'file_size': doc.file_size,
+                    'upload_date': doc.upload_date.isoformat(),
+                    'chunk_count': doc.chunk_count,
+                    'status': doc.status,
+                    'error_message': doc.error_message
+                }
+                data[doc_id] = doc_dict
+            with open(self.storage_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Failed to save documents to disk: {e}")
 
 # =============================================================================
 # 🔤 DOCUMENT PROCESSING
@@ -603,7 +646,14 @@ Note: No specific context was provided. Please provide a helpful response based 
                     response_length=len(response_text)
                 )
                 
-                self.logger.info(f"✅ Generated response in {response_time:.2f}s (confidence: {confidence:.2f})")
+                # ✨ CAPTURE TOKEN USAGE from OpenAI API response
+                token_usage = {
+                    "input_tokens": completion.usage.prompt_tokens,
+                    "output_tokens": completion.usage.completion_tokens,
+                    "total_tokens": completion.usage.total_tokens
+                }
+                
+                self.logger.info(f"✅ Generated response in {response_time:.2f}s (confidence: {confidence:.2f}, tokens: {token_usage['total_tokens']})")
                 
                 return {
                     "success": True,
@@ -611,7 +661,8 @@ Note: No specific context was provided. Please provide a helpful response based 
                     "confidence": confidence,
                     "model_used": self.config.openai_model,
                     "context_chunks_used": len(context_chunks),
-                    "response_time": response_time
+                    "response_time": response_time,
+                    "token_usage": token_usage  # ✨ Include token usage for analytics
                 }
                 
             except openai.APIError as e:
@@ -861,6 +912,78 @@ class RAGSystem:
                 "error": str(e),
                 "search_results": []  # ← ADD THIS
             }
+    
+    async def generate_follow_up_questions(self, query_text: str, response_text: str, 
+                                          search_results: List[Dict]) -> List[str]:
+        """
+        Generate intelligent follow-up questions based on the query, response, and available context
+        
+        Args:
+            query_text: User's original question
+            response_text: AI's response
+            search_results: Context chunks from vector search
+            
+        Returns:
+            List of 3-5 follow-up questions
+        """
+        try:
+            # Build context from search results
+            context_summary = "\n".join([
+                f"- {result['text'][:200]}..." 
+                for result in search_results[:3]
+            ]) if search_results else "No additional context available"
+            
+            # Prompt for follow-up generation
+            follow_up_prompt = f"""Based on this conversation, suggest 3-5 relevant follow-up questions the user might want to ask.
+
+USER'S QUESTION: {query_text}
+
+AI'S RESPONSE: {response_text[:500]}...
+
+AVAILABLE CONTEXT:
+{context_summary}
+
+Generate 3-5 natural, conversational follow-up questions that:
+1. Dig deeper into the topic
+2. Ask about related information
+3. Clarify details from the response
+4. Explore practical applications
+
+Format: Return ONLY the questions, one per line, no numbering or bullets.
+Example:
+What are the specific requirements?
+How long does this process take?
+Are there any exceptions to this policy?"""
+
+            # Generate follow-up questions using OpenAI
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.llm_manager.client.chat.completions.create(
+                    model=self.config.openai_model,
+                    messages=[{"role": "user", "content": follow_up_prompt}],
+                    max_tokens=200,
+                    temperature=0.7
+                )
+            )
+            
+            # Parse response
+            follow_ups_text = response.choices[0].message.content.strip()
+            follow_ups = [q.strip() for q in follow_ups_text.split('\n') if q.strip()]
+            
+            # Limit to 5 questions
+            follow_ups = follow_ups[:5]
+            
+            self.logger.info(f"✅ Generated {len(follow_ups)} follow-up questions")
+            return follow_ups
+            
+        except Exception as e:
+            self.logger.error(f"Follow-up generation failed: {str(e)}")
+            # Return default follow-ups
+            return [
+                "Can you tell me more about this?",
+                "What else should I know?",
+                "Are there any related topics?"
+            ]
     
     async def get_all_documents(self) -> List[Dict[str, Any]]:
         """Get all indexed documents with metadata"""
