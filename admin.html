@@ -967,6 +967,10 @@
                 <span>🔧</span>
                 <span>System Status</span>
             </div>
+            <div class="nav-item" onclick="showSection('audit')">
+                <span>📋</span>
+                <span>Audit Log</span>
+            </div>
             <div class="nav-item" onclick="logout()" style="margin-top: auto; border-top: 1px solid rgba(255,255,255,0.1); color: #e74c3c;">
                 <span>🚪</span>
                 <span>Logout</span>
@@ -1276,6 +1280,89 @@
                 </div>
             </div>
         </div>
+
+        <!-- Audit Log Section -->
+        <div id="audit-content" class="content-section">
+            <div class="header">
+                <h1>Audit Log</h1>
+                <button class="button" onclick="loadAuditLogs()">🔄 Refresh</button>
+            </div>
+
+            <!-- Audit Statistics -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                <div class="stat-card">
+                    <div class="stat-value" id="audit-total-events">-</div>
+                    <div class="stat-label">Total Events (30 days)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="audit-auth-events">-</div>
+                    <div class="stat-label">Authentication Events</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="audit-document-events">-</div>
+                    <div class="stat-label">Document Operations</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="audit-failed-events">-</div>
+                    <div class="stat-label">Failed Events</div>
+                </div>
+            </div>
+
+            <!-- Failed Logins Alert -->
+            <div id="failed-logins-alert" style="display: none; background: linear-gradient(135deg, #e74c3c, #c0392b); color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                <h3 style="margin: 0 0 10px 0;">⚠️ Recent Failed Login Attempts</h3>
+                <div id="failed-logins-list"></div>
+            </div>
+
+            <!-- Filters -->
+            <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h3 style="margin: 0 0 15px 0;">Filters</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #555;">Category</label>
+                        <select id="audit-filter-category" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="">All Categories</option>
+                            <option value="authentication">Authentication</option>
+                            <option value="document">Document</option>
+                            <option value="data_access">Data Access</option>
+                            <option value="user_management">User Management</option>
+                            <option value="system">System</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #555;">Status</label>
+                        <select id="audit-filter-status" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="">All Status</option>
+                            <option value="success">Success</option>
+                            <option value="failure">Failure</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #555;">Days</label>
+                        <select id="audit-filter-days" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="1">Last 24 hours</option>
+                            <option value="7">Last 7 days</option>
+                            <option value="30" selected>Last 30 days</option>
+                            <option value="90">Last 90 days</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; align-items: flex-end;">
+                        <button class="button" onclick="loadAuditLogs()" style="width: 100%;">Apply Filters</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit Log Table -->
+            <div class="table-container">
+                <h3>Recent Activity</h3>
+                <div id="audit-logs-table">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading audit logs...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1412,6 +1499,8 @@
                 loadAnalytics();
             } else if (section === 'system') {
                 loadSystemDetails();
+            } else if (section === 'audit') {
+                loadAuditLogs();
             }
         }
 
@@ -2168,7 +2257,7 @@
         // Load system details
         async function loadSystemDetails() {
             const systemDetails = document.getElementById('system-details');
-            
+
             try {
                 const response = await fetch(`${API_BASE}/health`);
                 const data = await response.json();
@@ -2183,6 +2272,189 @@
                 systemDetails.innerHTML = '<p style="text-align: center; color: #e74c3c; padding: 60px;">Error loading system details</p>';
                 console.error('Error loading system details:', error);
             }
+        }
+
+        // ===== AUDIT LOG FUNCTIONS =====
+
+        async function loadAuditLogs() {
+            const logsTable = document.getElementById('audit-logs-table');
+
+            // Check if user has admin permission
+            if (!hasPermission('admin')) {
+                logsTable.innerHTML = '<p style="text-align: center; color: #e74c3c; padding: 60px;">⛔ Audit logs are only accessible to administrators</p>';
+                return;
+            }
+
+            logsTable.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading audit logs...</p></div>';
+
+            try {
+                // Get filter values
+                const category = document.getElementById('audit-filter-category').value;
+                const status = document.getElementById('audit-filter-status').value;
+                const days = document.getElementById('audit-filter-days').value;
+
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (category) params.append('category', category);
+                if (status) params.append('status', status);
+                params.append('limit', '50');
+
+                // Calculate date range
+                const endDate = new Date();
+                const startDate = new Date();
+                startDate.setDate(startDate.getDate() - parseInt(days));
+                params.append('start_date', startDate.toISOString());
+                params.append('end_date', endDate.toISOString());
+
+                const response = await authFetch(`${API_BASE}/api/audit/logs?${params.toString()}`);
+
+                if (!response.ok) {
+                    throw new Error('Failed to load audit logs');
+                }
+
+                const data = await response.json();
+
+                if (data.logs && data.logs.length > 0) {
+                    logsTable.innerHTML = `
+                        <div style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                        <th style="padding: 12px; text-align: left;">Timestamp</th>
+                                        <th style="padding: 12px; text-align: left;">User</th>
+                                        <th style="padding: 12px; text-align: left;">Category</th>
+                                        <th style="padding: 12px; text-align: left;">Action</th>
+                                        <th style="padding: 12px; text-align: left;">Status</th>
+                                        <th style="padding: 12px; text-align: left;">Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.logs.map(log => `
+                                        <tr style="border-bottom: 1px solid #dee2e6;">
+                                            <td style="padding: 12px; white-space: nowrap;">${formatTimestamp(log.timestamp)}</td>
+                                            <td style="padding: 12px;">
+                                                <div style="font-weight: 600;">${log.user_email || 'Unknown'}</div>
+                                                ${log.ip_address ? `<div style="font-size: 0.85em; color: #666;">${log.ip_address}</div>` : ''}
+                                            </td>
+                                            <td style="padding: 12px;">
+                                                <span style="background: ${getCategoryColor(log.category)}; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.85em;">
+                                                    ${log.category}
+                                                </span>
+                                            </td>
+                                            <td style="padding: 12px;">${log.action}</td>
+                                            <td style="padding: 12px;">
+                                                <span style="color: ${log.status === 'success' ? '#27ae60' : '#e74c3c'}; font-weight: 600;">
+                                                    ${log.status === 'success' ? '✓' : '✗'} ${log.status}
+                                                </span>
+                                            </td>
+                                            <td style="padding: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
+                                                ${log.details || '-'}
+                                                ${log.error_message ? `<div style="color: #e74c3c; margin-top: 4px;">${log.error_message}</div>` : ''}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top: 15px; text-align: center; color: #666;">
+                            Showing ${data.logs.length} of ${data.total} events
+                        </div>
+                    `;
+                } else {
+                    logsTable.innerHTML = '<p style="text-align: center; color: #666; padding: 60px;">No audit logs found for the selected filters</p>';
+                }
+
+                // Load statistics
+                await loadAuditStatistics(parseInt(days));
+
+                // Load failed logins
+                await loadFailedLogins();
+
+            } catch (error) {
+                logsTable.innerHTML = '<p style="text-align: center; color: #e74c3c; padding: 60px;">Error loading audit logs</p>';
+                console.error('Error loading audit logs:', error);
+            }
+        }
+
+        async function loadAuditStatistics(days = 30) {
+            if (!hasPermission('admin')) return;
+
+            try {
+                const response = await authFetch(`${API_BASE}/api/audit/statistics?days=${days}`);
+
+                if (!response.ok) return;
+
+                const data = await response.json();
+
+                // Update statistics cards
+                document.getElementById('audit-total-events').textContent = data.total_events || 0;
+                document.getElementById('audit-auth-events').textContent = data.by_category?.authentication || 0;
+                document.getElementById('audit-document-events').textContent = data.by_category?.document || 0;
+                document.getElementById('audit-failed-events').textContent = data.by_status?.failure || 0;
+
+            } catch (error) {
+                console.error('Error loading audit statistics:', error);
+            }
+        }
+
+        async function loadFailedLogins() {
+            if (!hasPermission('admin')) return;
+
+            try {
+                const response = await authFetch(`${API_BASE}/api/audit/failed-logins?hours=24`);
+
+                if (!response.ok) return;
+
+                const failedLogins = await response.json();
+
+                if (failedLogins && failedLogins.length > 0) {
+                    document.getElementById('failed-logins-alert').style.display = 'block';
+                    document.getElementById('failed-logins-list').innerHTML = `
+                        <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;">
+                            ${failedLogins.slice(0, 5).map(login => `
+                                <div style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
+                                    <strong>${login.user_email}</strong>
+                                    from ${login.ip_address || 'unknown IP'}
+                                    at ${formatTimestamp(login.timestamp)}
+                                    ${login.error_message ? `<br><span style="font-size: 0.9em; opacity: 0.9;">${login.error_message}</span>` : ''}
+                                </div>
+                            `).join('')}
+                            ${failedLogins.length > 5 ? `<div style="margin-top: 10px; opacity: 0.8;">... and ${failedLogins.length - 5} more attempts</div>` : ''}
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('failed-logins-alert').style.display = 'none';
+                }
+
+            } catch (error) {
+                console.error('Error loading failed logins:', error);
+            }
+        }
+
+        function getCategoryColor(category) {
+            const colors = {
+                'authentication': '#3498db',
+                'document': '#9b59b6',
+                'data_access': '#1abc9c',
+                'user_management': '#e67e22',
+                'system': '#34495e'
+            };
+            return colors[category] || '#95a5a6';
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            const seconds = Math.floor(diff / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+
+            if (days > 0) return `${days}d ago`;
+            if (hours > 0) return `${hours}h ago`;
+            if (minutes > 0) return `${minutes}m ago`;
+            return 'Just now';
         }
 
         // Save configuration

@@ -53,6 +53,13 @@ except ImportError:
     AUTH_AVAILABLE = False
     logging.warning("⚠️ auth.py not found - authentication disabled")
 
+try:
+    from audit_log import AuditLogger, set_audit_logger, get_audit_logger
+    AUDIT_AVAILABLE = True
+except ImportError:
+    AUDIT_AVAILABLE = False
+    logging.warning("⚠️ audit_log.py not found - audit logging disabled")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -226,6 +233,17 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Authentication system initialization failed: {e}")
                 self.auth_manager = None
+
+        # ✨ PHASE 2: Audit logging system
+        self.audit_logger = None
+        if AUDIT_AVAILABLE:
+            try:
+                self.audit_logger = AuditLogger(db_path="data/audit_log.db")
+                set_audit_logger(self.audit_logger)
+                logger.info("✅ Audit logging system initialized: data/audit_log.db")
+            except Exception as e:
+                logger.error(f"❌ Audit logging system initialization failed: {e}")
+                self.audit_logger = None
 
         self.startup_complete = False
     
@@ -605,10 +623,13 @@ async def register(user_data: UserCreate):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+async def login(credentials: UserLogin, request: Request):
     """Authenticate user and return access token"""
     if not app_state.auth_manager:
         raise HTTPException(status_code=503, detail="Authentication not available")
+
+    # Get client IP
+    client_ip = request.client.host if request.client else None
 
     # Authenticate user
     user_dict = app_state.auth_manager.authenticate_user(
@@ -617,9 +638,29 @@ async def login(credentials: UserLogin):
     )
 
     if not user_dict:
+        # Log failed login attempt
+        if app_state.audit_logger:
+            app_state.audit_logger.log_auth_event(
+                action=app_state.audit_logger.ACTION_LOGIN_FAILED,
+                user_email=credentials.email,
+                ip_address=client_ip,
+                status="failure",
+                error_message="Incorrect email or password"
+            )
+
         raise HTTPException(
             status_code=401,
             detail="Incorrect email or password"
+        )
+
+    # Log successful login
+    if app_state.audit_logger:
+        app_state.audit_logger.log_auth_event(
+            action=app_state.audit_logger.ACTION_LOGIN,
+            user_id=user_dict['id'],
+            user_email=user_dict['email'],
+            ip_address=client_ip,
+            status="success"
         )
 
     # Generate token
@@ -727,7 +768,24 @@ async def upload_document(
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log upload to analytics: {e}")
-            
+
+            # ✨ PHASE 2: Log document upload to audit log
+            if app_state.audit_logger:
+                try:
+                    app_state.audit_logger.log_document_event(
+                        action=app_state.audit_logger.ACTION_UPLOAD,
+                        user_id=current_user.id,
+                        user_email=current_user.email,
+                        document_name=file.filename,
+                        metadata={
+                            'file_size': file_size,
+                            'chunks_created': chunks_created,
+                            'file_extension': file_extension
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log upload to audit: {e}")
+
             message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
         else:
             message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
@@ -1486,6 +1544,95 @@ async def export_analytics(format: str = "json"):
     except Exception as e:
         logger.error(f"Failed to export analytics: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export data: {str(e)}")
+
+# =============================================================================
+# 📋 AUDIT LOG ENDPOINTS (PHASE 2)
+# =============================================================================
+
+@app.get("/api/audit/logs")
+async def get_audit_logs(
+    user_id: Optional[int] = None,
+    category: Optional[str] = None,
+    action: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit logs with filters (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        result = app_state.audit_logger.get_logs(
+            user_id=user_id,
+            category=category,
+            action=action,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            limit=limit,
+            offset=offset
+        )
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.error(f"Failed to get audit logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/statistics")
+async def get_audit_statistics(
+    days: int = 30,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit log statistics (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        stats = app_state.audit_logger.get_statistics(days=days)
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Failed to get audit statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/user/{user_id}")
+async def get_user_audit_logs(
+    user_id: int,
+    days: int = 30,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit logs for a specific user (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        logs = app_state.audit_logger.get_user_activity(user_id=user_id, days=days)
+        return JSONResponse(content={'logs': logs, 'user_id': user_id, 'days': days})
+    except Exception as e:
+        logger.error(f"Failed to get user audit logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/failed-logins")
+async def get_failed_logins(
+    hours: int = 24,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get recent failed login attempts (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        logs = app_state.audit_logger.get_failed_logins(hours=hours)
+        return JSONResponse(content={'logs': logs, 'hours': hours})
+    except Exception as e:
+        logger.error(f"Failed to get failed logins: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER
