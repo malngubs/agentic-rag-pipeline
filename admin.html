@@ -628,6 +628,118 @@
             border-style: solid;
             box-shadow: 0 8px 20px rgba(39, 174, 96, 0.2);
         }
+
+        /* Document Tags */
+        .tag-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 2px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tag-badge:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .tag-badge-remove {
+            margin-left: 6px;
+            cursor: pointer;
+            opacity: 0.8;
+        }
+
+        .tag-badge-remove:hover {
+            opacity: 1;
+        }
+
+        .tag-input-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .tag-input {
+            flex: 1;
+            padding: 6px 10px;
+            border: 2px solid #ecf0f1;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .tag-input:focus {
+            border-color: #FF6E00;
+            outline: none;
+        }
+
+        .tag-suggestions {
+            position: absolute;
+            background: white;
+            border: 2px solid #ecf0f1;
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            min-width: 200px;
+        }
+
+        .tag-suggestion-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .tag-suggestion-item:hover {
+            background: #f8f9fa;
+        }
+
+        .tag-filter-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .tag-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .tag-cloud-item {
+            padding: 6px 14px;
+            background: #ecf0f1;
+            border-radius: 16px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .tag-cloud-item:hover {
+            background: #fff5ec;
+            border-color: #FF6E00;
+        }
+
+        .tag-cloud-item.active {
+            background: linear-gradient(135deg, #FF6E00 0%, #FF8533 100%);
+            color: white;
+            border-color: #FF6E00;
+        }
+
+        .tag-count {
+            margin-left: 6px;
+            opacity: 0.7;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
@@ -844,6 +956,17 @@
                         <strong>Summary:</strong>
                         <span id="upload-summary-text">Ready to upload</span>
                     </div>
+                </div>
+            </div>
+
+            <!-- Tag Filter Section -->
+            <div class="tag-filter-section">
+                <h3 style="margin: 0 0 10px 0;">🏷️ Filter by Tags</h3>
+                <div id="tag-cloud" class="tag-cloud">
+                    <span style="color: #999;">Loading tags...</span>
+                </div>
+                <div style="margin-top: 10px; font-size: 13px; color: #666;">
+                    <span id="tag-filter-status">Click tags to filter documents</span>
                 </div>
             </div>
 
@@ -1573,7 +1696,13 @@
             }
         }
 
-        // Load documents
+        // ===== DOCUMENT TAGGING FUNCTIONALITY =====
+
+        let documentTags = {};  // Store tags for each document
+        let allTags = [];  // All available tags
+        let selectedFilterTags = [];  // Tags selected for filtering
+
+        // Load documents with tags
         async function loadDocuments() {
             const tableDiv = document.getElementById('documents-table');
             tableDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading documents...</p></div>';
@@ -1583,6 +1712,23 @@
                 const data = await response.json();
 
                 if (data.documents && data.documents.length > 0) {
+                    // Fetch tags for all documents
+                    await loadAllDocumentTags(data.documents);
+
+                    // Apply filter if active
+                    let docsToShow = data.documents;
+                    if (selectedFilterTags.length > 0) {
+                        docsToShow = data.documents.filter(doc => {
+                            const docTags = documentTags[doc.doc_id] || [];
+                            return selectedFilterTags.some(tag => docTags.includes(tag));
+                        });
+                    }
+
+                    if (docsToShow.length === 0 && selectedFilterTags.length > 0) {
+                        tableDiv.innerHTML = '<p style="text-align: center; padding: 40px;">No documents match the selected tags</p>';
+                        return;
+                    }
+
                     let html = `
                         <table>
                             <thead>
@@ -1591,17 +1737,33 @@
                                     <th>Type</th>
                                     <th>Size</th>
                                     <th>Chunks</th>
+                                    <th>Tags</th>
                                     <th>Uploaded</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${data.documents.map(doc => `
+                                ${docsToShow.map(doc => `
                                     <tr>
                                         <td><strong>${doc.filename}</strong></td>
                                         <td>${doc.file_type.toUpperCase()}</td>
                                         <td>${(doc.file_size / 1024).toFixed(2)} KB</td>
-                                        <td>${doc.chunks_count || 'N/A'}</td>
+                                        <td>${doc.chunk_count || 'N/A'}</td>
+                                        <td>
+                                            <div id="tags-${doc.doc_id}">
+                                                ${renderDocumentTags(doc.doc_id)}
+                                            </div>
+                                            <div class="tag-input-container">
+                                                <input type="text"
+                                                       class="tag-input"
+                                                       id="tag-input-${doc.doc_id}"
+                                                       placeholder="Add tag..."
+                                                       onkeyup="handleTagInput(event, '${doc.doc_id}')"
+                                                       onkeydown="handleTagKeydown(event, '${doc.doc_id}')">
+                                                <button class="btn-small" onclick="addTagToDocument('${doc.doc_id}')">+ Add</button>
+                                            </div>
+                                            <div id="tag-suggestions-${doc.doc_id}" class="tag-suggestions" style="display: none;"></div>
+                                        </td>
                                         <td>${new Date(doc.upload_date).toLocaleDateString()}</td>
                                         <td>
                                             <div class="action-buttons">
@@ -1618,10 +1780,221 @@
                 } else {
                     tableDiv.innerHTML = '<p style="text-align: center; padding: 40px;">No documents uploaded yet</p>';
                 }
+
+                // Load tag cloud
+                await loadTagCloud();
             } catch (error) {
                 console.error('Failed to load documents:', error);
                 tableDiv.innerHTML = '<p style="text-align: center; padding: 40px; color: #e74c3c;">Error loading documents</p>';
             }
+        }
+
+        // Load tags for all documents
+        async function loadAllDocumentTags(documents) {
+            for (const doc of documents) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/documents/${doc.doc_id}/tags`);
+                    const data = await response.json();
+                    documentTags[doc.doc_id] = data.tags || [];
+                } catch (error) {
+                    console.error(`Failed to load tags for ${doc.doc_id}:`, error);
+                    documentTags[doc.doc_id] = [];
+                }
+            }
+        }
+
+        // Render tags for a document
+        function renderDocumentTags(docId) {
+            const tags = documentTags[docId] || [];
+            if (tags.length === 0) {
+                return '<span style="color: #999; font-size: 12px;">No tags</span>';
+            }
+
+            return tags.map(tag => `
+                <span class="tag-badge">
+                    ${tag}
+                    <span class="tag-badge-remove" onclick="removeTagFromDocument('${docId}', '${tag}')">✕</span>
+                </span>
+            `).join('');
+        }
+
+        // Add tag to document
+        async function addTagToDocument(docId) {
+            const input = document.getElementById(`tag-input-${docId}`);
+            const tag = input.value.trim();
+
+            if (!tag) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/documents/${docId}/tags`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify([tag])
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    documentTags[docId] = result.tags;
+                    document.getElementById(`tags-${docId}`).innerHTML = renderDocumentTags(docId);
+                    input.value = '';
+                    hideTagSuggestions(docId);
+                    showAlert('success', `✓ Tag "${tag}" added`);
+                    await loadTagCloud();  // Refresh tag cloud
+                } else {
+                    showAlert('error', `✗ Failed to add tag`);
+                }
+            } catch (error) {
+                console.error('Failed to add tag:', error);
+                showAlert('error', `✗ Error adding tag`);
+            }
+        }
+
+        // Remove tag from document
+        async function removeTagFromDocument(docId, tag) {
+            try {
+                const response = await fetch(`${API_BASE}/api/documents/${docId}/tags/${encodeURIComponent(tag)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    documentTags[docId] = result.tags;
+                    document.getElementById(`tags-${docId}`).innerHTML = renderDocumentTags(docId);
+                    showAlert('success', `✓ Tag "${tag}" removed`);
+                    await loadTagCloud();  // Refresh tag cloud
+                } else {
+                    showAlert('error', `✗ Failed to remove tag`);
+                }
+            } catch (error) {
+                console.error('Failed to remove tag:', error);
+                showAlert('error', `✗ Error removing tag`);
+            }
+        }
+
+        // Handle tag input with autocomplete
+        async function handleTagInput(event, docId) {
+            const input = event.target;
+            const value = input.value.trim();
+
+            if (value.length < 1) {
+                hideTagSuggestions(docId);
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/tags/autocomplete?prefix=${encodeURIComponent(value)}`);
+                const data = await response.json();
+
+                if (data.suggestions && data.suggestions.length > 0) {
+                    showTagSuggestions(docId, data.suggestions);
+                } else {
+                    hideTagSuggestions(docId);
+                }
+            } catch (error) {
+                console.error('Autocomplete error:', error);
+            }
+        }
+
+        // Handle tag input keydown
+        function handleTagKeydown(event, docId) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addTagToDocument(docId);
+            } else if (event.key === 'Escape') {
+                hideTagSuggestions(docId);
+            }
+        }
+
+        // Show tag suggestions
+        function showTagSuggestions(docId, suggestions) {
+            const container = document.getElementById(`tag-suggestions-${docId}`);
+            const input = document.getElementById(`tag-input-${docId}`);
+
+            const html = suggestions.map(tag => `
+                <div class="tag-suggestion-item" onclick="selectTagSuggestion('${docId}', '${tag}')">
+                    ${tag}
+                </div>
+            `).join('');
+
+            container.innerHTML = html;
+            container.style.display = 'block';
+
+            // Position below input
+            const rect = input.getBoundingClientRect();
+            container.style.top = (rect.bottom + window.scrollY) + 'px';
+            container.style.left = rect.left + 'px';
+        }
+
+        // Hide tag suggestions
+        function hideTagSuggestions(docId) {
+            const container = document.getElementById(`tag-suggestions-${docId}`);
+            if (container) {
+                container.style.display = 'none';
+            }
+        }
+
+        // Select tag from suggestions
+        function selectTagSuggestion(docId, tag) {
+            const input = document.getElementById(`tag-input-${docId}`);
+            input.value = tag;
+            hideTagSuggestions(docId);
+            addTagToDocument(docId);
+        }
+
+        // Load tag cloud for filtering
+        async function loadTagCloud() {
+            try {
+                const response = await fetch(`${API_BASE}/api/tags`);
+                const data = await response.json();
+
+                allTags = data.tags || [];
+                const tagStats = data.tag_stats || {};
+
+                const cloudDiv = document.getElementById('tag-cloud');
+
+                if (allTags.length === 0) {
+                    cloudDiv.innerHTML = '<span style="color: #999;">No tags yet. Add tags to documents to see them here.</span>';
+                    return;
+                }
+
+                const html = allTags.map(tag => {
+                    const count = tagStats[tag] || 0;
+                    const isActive = selectedFilterTags.includes(tag);
+                    return `
+                        <div class="tag-cloud-item ${isActive ? 'active' : ''}" onclick="toggleTagFilter('${tag}')">
+                            ${tag}<span class="tag-count">(${count})</span>
+                        </div>
+                    `;
+                }).join('');
+
+                cloudDiv.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load tag cloud:', error);
+            }
+        }
+
+        // Toggle tag filter
+        function toggleTagFilter(tag) {
+            const index = selectedFilterTags.indexOf(tag);
+
+            if (index > -1) {
+                selectedFilterTags.splice(index, 1);
+            } else {
+                selectedFilterTags.push(tag);
+            }
+
+            // Update status text
+            const statusSpan = document.getElementById('tag-filter-status');
+            if (selectedFilterTags.length === 0) {
+                statusSpan.textContent = 'Click tags to filter documents';
+            } else {
+                statusSpan.textContent = `Filtering by: ${selectedFilterTags.join(', ')}`;
+            }
+
+            // Reload documents with filter
+            loadDocuments();
         }
 
         // Delete document
