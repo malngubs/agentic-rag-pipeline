@@ -18,7 +18,7 @@ from datetime import datetime
 import json
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +41,24 @@ try:
 except ImportError:
     CITATIONS_AVAILABLE = False
     logging.warning("⚠️ source_citations.py not found - enhanced citations disabled")
+
+try:
+    from auth import (
+        AuthManager, UserCreate, UserLogin, TokenResponse, UserResponse,
+        get_current_user, get_current_user_optional, set_auth_manager,
+        require_viewer, require_editor, require_admin, RoleChecker
+    )
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    logging.warning("⚠️ auth.py not found - authentication disabled")
+
+try:
+    from audit_log import AuditLogger, set_audit_logger, get_audit_logger
+    AUDIT_AVAILABLE = True
+except ImportError:
+    AUDIT_AVAILABLE = False
+    logging.warning("⚠️ audit_log.py not found - audit logging disabled")
 
 # Configure logging
 logging.basicConfig(
@@ -204,7 +222,29 @@ class ApplicationState:
             except Exception as e:
                 logger.error(f"❌ Citation builder initialization failed: {e}")
                 self.citation_builder = None
-        
+
+        # ✨ PHASE 2: Authentication system
+        self.auth_manager = None
+        if AUTH_AVAILABLE:
+            try:
+                self.auth_manager = AuthManager(db_path="data/auth.db")
+                set_auth_manager(self.auth_manager)  # Set global instance
+                logger.info("✅ Authentication system initialized: data/auth.db")
+            except Exception as e:
+                logger.error(f"❌ Authentication system initialization failed: {e}")
+                self.auth_manager = None
+
+        # ✨ PHASE 2: Audit logging system
+        self.audit_logger = None
+        if AUDIT_AVAILABLE:
+            try:
+                self.audit_logger = AuditLogger(db_path="data/audit_log.db")
+                set_audit_logger(self.audit_logger)
+                logger.info("✅ Audit logging system initialized: data/audit_log.db")
+            except Exception as e:
+                logger.error(f"❌ Audit logging system initialization failed: {e}")
+                self.audit_logger = None
+
         self.startup_complete = False
     
     async def initialize_components(self):
@@ -463,6 +503,30 @@ async def serve_admin():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/login.html", response_class=HTMLResponse)
+async def serve_login():
+    """Serve the login page"""
+    try:
+        possible_paths = [
+            Path("../login.html"),
+            Path("login.html"),
+            Path("./login.html"),
+            Path(__file__).parent / "login.html",
+            Path(__file__).parent.parent / "login.html"
+        ]
+
+        for path in possible_paths:
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return HTMLResponse(content=f.read())
+
+        raise HTTPException(status_code=404, detail="Login page not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving login.html: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -528,14 +592,128 @@ async def rag_status():
         }
 
 # =============================================================================
+# 🔐 AUTHENTICATION ENDPOINTS (PHASE 2)
+# =============================================================================
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+async def register(user_data: UserCreate):
+    """Register a new user account"""
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    try:
+        # Create user
+        user = app_state.auth_manager.create_user(user_data)
+
+        # Generate token
+        token = app_state.auth_manager.create_access_token(
+            user_id=user.id,
+            email=user.email,
+            role=user.role
+        )
+
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            user=user
+        )
+    except Exception as e:
+        logger.error(f"Registration failed: {e}")
+        raise
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(credentials: UserLogin, request: Request):
+    """Authenticate user and return access token"""
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    # Get client IP
+    client_ip = request.client.host if request.client else None
+
+    # Authenticate user
+    user_dict = app_state.auth_manager.authenticate_user(
+        email=credentials.email,
+        password=credentials.password
+    )
+
+    if not user_dict:
+        # Log failed login attempt
+        if app_state.audit_logger:
+            app_state.audit_logger.log_auth_event(
+                action=app_state.audit_logger.ACTION_LOGIN_FAILED,
+                user_email=credentials.email,
+                ip_address=client_ip,
+                status="failure",
+                error_message="Incorrect email or password"
+            )
+
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
+        )
+
+    # Log successful login
+    if app_state.audit_logger:
+        app_state.audit_logger.log_auth_event(
+            action=app_state.audit_logger.ACTION_LOGIN,
+            user_id=user_dict['id'],
+            user_email=user_dict['email'],
+            ip_address=client_ip,
+            status="success"
+        )
+
+    # Generate token
+    token = app_state.auth_manager.create_access_token(
+        user_id=user_dict['id'],
+        email=user_dict['email'],
+        role=user_dict['role']
+    )
+
+    # Create user response
+    user = UserResponse(
+        id=user_dict['id'],
+        email=user_dict['email'],
+        full_name=user_dict['full_name'],
+        role=user_dict['role'],
+        created_at=user_dict['created_at'],
+        last_login=user_dict['last_login']
+    )
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user
+    )
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_current_user_info(current_user: UserResponse = Depends(get_current_user)):
+    """Get current authenticated user info"""
+    return current_user
+
+
+@app.get("/api/auth/users", response_model=List[UserResponse])
+async def list_users(current_user: UserResponse = Depends(require_admin)):
+    """List all users (admin only)"""
+    if not app_state.auth_manager:
+        raise HTTPException(status_code=503, detail="Authentication not available")
+
+    return app_state.auth_manager.get_all_users()
+
+
+# =============================================================================
 # 📤 DOCUMENT UPLOAD
 # =============================================================================
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
-    """Enhanced document upload with Phase 1 analytics logging"""
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(require_editor)
+):
+    """Enhanced document upload with Phase 1 analytics logging (requires editor role)"""
     start_time = time.time()
-    logger.info(f"📤 Upload request received: {file.filename}")
+    logger.info(f"📤 Upload request received: {file.filename} by {current_user.email}")
     
     try:
         # Validation
@@ -590,7 +768,24 @@ async def upload_document(file: UploadFile = File(...)):
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log upload to analytics: {e}")
-            
+
+            # ✨ PHASE 2: Log document upload to audit log
+            if app_state.audit_logger:
+                try:
+                    app_state.audit_logger.log_document_event(
+                        action=app_state.audit_logger.ACTION_UPLOAD,
+                        user_id=current_user.id,
+                        user_email=current_user.email,
+                        document_name=file.filename,
+                        metadata={
+                            'file_size': file_size,
+                            'chunks_created': chunks_created,
+                            'file_extension': file_extension
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log upload to audit: {e}")
+
             message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
         else:
             message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
@@ -1178,15 +1373,19 @@ async def transcribe_audio(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations", response_model=ConversationHistoryResponse)
-async def get_conversations(limit: int = 50, offset: int = 0):
-    """Get conversation history from analytics database"""
+async def get_conversations(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: UserResponse = Depends(require_viewer)
+):
+    """Get conversation history from analytics database (requires authentication)"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         conversations = app_state.analytics_db.get_all_conversations(limit=limit, offset=offset)
         total = app_state.analytics_db.get_total_conversations()
-        
+
         return ConversationHistoryResponse(
             conversations=conversations,
             total=total
@@ -1195,9 +1394,39 @@ async def get_conversations(limit: int = 50, offset: int = 0):
         logger.error(f"Failed to get conversations: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve conversations: {str(e)}")
 
+@app.get("/api/conversations/search")
+async def search_conversations(
+    query: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """Search conversations by various criteria"""
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        result = app_state.analytics_db.search_conversations(
+            query=query,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset
+        )
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to search conversations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to search conversations: {str(e)}")
+
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
-async def get_analytics_summary():
-    """Get analytics summary"""
+async def get_analytics_summary(current_user: UserResponse = Depends(require_viewer)):
+    """Get analytics summary (requires authentication)"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
     
@@ -1222,9 +1451,13 @@ async def get_analytics_summary():
         raise HTTPException(status_code=500, detail=f"Failed to retrieve analytics: {str(e)}")
 
 @app.get("/api/analytics/budget-alert")
-async def get_budget_alert(daily_budget: float = 10.0, monthly_budget: float = 300.0):
+async def get_budget_alert(
+    daily_budget: float = 10.0,
+    monthly_budget: float = 300.0,
+    current_user: UserResponse = Depends(require_viewer)
+):
     """
-    Get budget alert status
+    Get budget alert status (requires authentication)
     Checks current spending against daily and monthly budgets
     """
     if not app_state.analytics_db:
@@ -1238,19 +1471,34 @@ async def get_budget_alert(daily_budget: float = 10.0, monthly_budget: float = 3
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/cost-breakdown")
-async def get_cost_breakdown(days: int = 30):
+async def get_cost_breakdown(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
     """
-    Get detailed cost breakdown by model and time period
+    Get detailed cost breakdown by model and time period (requires authentication)
     Provides granular cost analysis for the specified number of days
     """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         breakdown = app_state.analytics_db.get_cost_breakdown(days=days)
         return JSONResponse(content=breakdown)
     except Exception as e:
         logger.error(f"Failed to get cost breakdown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics/daily-stats")
+async def get_daily_stats(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
+    """
+    Get daily statistics for time-series charts (requires authentication)
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        stats = app_state.analytics_db.get_daily_stats(days=days)
+        return JSONResponse(content={"daily_stats": stats, "days": days})
+    except Exception as e:
+        logger.error(f"Failed to get daily stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/export")
@@ -1296,6 +1544,95 @@ async def export_analytics(format: str = "json"):
     except Exception as e:
         logger.error(f"Failed to export analytics: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export data: {str(e)}")
+
+# =============================================================================
+# 📋 AUDIT LOG ENDPOINTS (PHASE 2)
+# =============================================================================
+
+@app.get("/api/audit/logs")
+async def get_audit_logs(
+    user_id: Optional[int] = None,
+    category: Optional[str] = None,
+    action: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit logs with filters (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        result = app_state.audit_logger.get_logs(
+            user_id=user_id,
+            category=category,
+            action=action,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            limit=limit,
+            offset=offset
+        )
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.error(f"Failed to get audit logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/statistics")
+async def get_audit_statistics(
+    days: int = 30,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit log statistics (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        stats = app_state.audit_logger.get_statistics(days=days)
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Failed to get audit statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/user/{user_id}")
+async def get_user_audit_logs(
+    user_id: int,
+    days: int = 30,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get audit logs for a specific user (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        logs = app_state.audit_logger.get_user_activity(user_id=user_id, days=days)
+        return JSONResponse(content={'logs': logs, 'user_id': user_id, 'days': days})
+    except Exception as e:
+        logger.error(f"Failed to get user audit logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/failed-logins")
+async def get_failed_logins(
+    hours: int = 24,
+    current_user: UserResponse = Depends(require_admin)
+):
+    """Get recent failed login attempts (admin only)"""
+    if not app_state.audit_logger:
+        raise HTTPException(status_code=503, detail="Audit logging not available")
+
+    try:
+        logs = app_state.audit_logger.get_failed_logins(hours=hours)
+        return JSONResponse(content={'logs': logs, 'hours': hours})
+    except Exception as e:
+        logger.error(f"Failed to get failed logins: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER
