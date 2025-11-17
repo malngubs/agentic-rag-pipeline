@@ -794,14 +794,37 @@ class AnalyticsDatabase:
                 "end_date": datetime.now().isoformat()
             }
     
+    def get_daily_stats(self, days: int = 30) -> List[Dict[str, Any]]:
+        """
+        Get daily statistics for charting
+
+        Args:
+            days: Number of days to retrieve
+
+        Returns:
+            List of daily statistics dictionaries
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT * FROM daily_stats
+                WHERE date >= DATE(?)
+                ORDER BY date ASC
+            """, (cutoff_date,))
+
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_budget_alert(self, daily_budget: float, monthly_budget: float) -> Dict[str, Any]:
         """
         Check if spending is approaching budget limits
-        
+
         Args:
             daily_budget: Daily spending limit in USD
             monthly_budget: Monthly spending limit in USD
-            
+
         Returns:
             Dictionary with alert status and details
         """

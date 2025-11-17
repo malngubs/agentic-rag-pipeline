@@ -1275,12 +1275,27 @@ async def get_cost_breakdown(days: int = 30):
     """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         breakdown = app_state.analytics_db.get_cost_breakdown(days=days)
         return JSONResponse(content=breakdown)
     except Exception as e:
         logger.error(f"Failed to get cost breakdown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics/daily-stats")
+async def get_daily_stats(days: int = 30):
+    """
+    Get daily statistics for time-series charts
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        stats = app_state.analytics_db.get_daily_stats(days=days)
+        return JSONResponse(content={"daily_stats": stats, "days": days})
+    except Exception as e:
+        logger.error(f"Failed to get daily stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/export")
