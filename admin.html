@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Portal - Macrocomm AI Assistant</title>
+    <!-- Chart.js for beautiful visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -529,6 +531,79 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Chart Containers */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .chart-container {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .chart-container h3 {
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-size: 18px;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+        }
+
+        .chart-full {
+            grid-column: 1 / -1;
+        }
+
+        @media (max-width: 900px) {
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Executive Dashboard Styles */
+        .executive-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+
+        .executive-header h2 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .executive-header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .metric-highlight {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .metric-highlight h4 {
+            font-size: 36px;
+            margin-bottom: 5px;
+        }
+
+        .metric-highlight p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -758,9 +833,73 @@
         <div id="analytics-content" class="content-section">
             <div class="header">
                 <h1>Analytics & Insights</h1>
-                <button class="button" onclick="loadAnalytics()">🔄 Refresh</button>
+                <div style="display: flex; gap: 10px;">
+                    <select id="analytics-timeframe" onchange="loadAnalytics()" style="padding: 12px 20px; border-radius: 8px; border: 2px solid #FF6E00; background: white; color: #2c3e50; font-weight: 600; cursor: pointer;">
+                        <option value="7">Last 7 Days</option>
+                        <option value="14">Last 14 Days</option>
+                        <option value="30" selected>Last 30 Days</option>
+                        <option value="60">Last 60 Days</option>
+                        <option value="90">Last 90 Days</option>
+                    </select>
+                    <button class="button" onclick="loadAnalytics()">🔄 Refresh</button>
+                </div>
             </div>
-            <div class="loading">
+
+            <!-- Executive Summary Cards -->
+            <div id="analytics-summary-cards"></div>
+
+            <!-- Charts Grid -->
+            <div class="chart-grid">
+                <!-- Usage Trend Chart -->
+                <div class="chart-container chart-full">
+                    <h3>📊 Query Volume Over Time</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="queryVolumeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Cost Trend Chart -->
+                <div class="chart-container">
+                    <h3>💰 Cost Trends</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="costTrendChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Response Time Chart -->
+                <div class="chart-container">
+                    <h3>⚡ Response Time Performance</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="responseTimeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Success Rate Chart -->
+                <div class="chart-container">
+                    <h3>✅ Success Rate Over Time</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="successRateChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- RAG Usage Chart -->
+                <div class="chart-container">
+                    <h3>🔍 RAG Usage Percentage</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="ragUsageChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Cost Breakdown Pie Chart -->
+                <div class="chart-container">
+                    <h3>💸 Cost Distribution by Model</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="costBreakdownChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div id="analytics-loading" class="loading">
                 <div class="spinner"></div>
                 <p>Loading analytics...</p>
             </div>
@@ -1224,65 +1363,351 @@
             }
         }
 
-        // Load analytics
+        // ===== ENHANCED ANALYTICS WITH CHARTS =====
+
+        let analyticsCharts = {};  // Store chart instances for cleanup
+
+        // Load analytics with beautiful charts
         async function loadAnalytics() {
-            const content = document.getElementById('analytics-content');
-            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading analytics...</p></div>';
+            const loading = document.getElementById('analytics-loading');
+            const timeframe = document.getElementById('analytics-timeframe')?.value || 30;
+
+            loading.style.display = 'block';
 
             try {
-                const response = await fetch(`${API_BASE}/api/analytics/summary`);
-                const data = await response.json();
+                // Fetch summary data
+                const summaryResponse = await fetch(`${API_BASE}/api/analytics/summary`);
+                const summaryData = await summaryResponse.json();
 
-                if (data) {
-                    let html = `
-                        <div class="header">
-                            <h1>Analytics & Insights</h1>
-                            <button class="button" onclick="loadAnalytics()">🔄 Refresh</button>
-                        </div>
-                        <div class="stats-grid">
-                            <div class="stat-card">
-                                <h3>${data.total_queries || 0}</h3>
-                                <p>Total Queries</p>
-                            </div>
-                            <div class="stat-card">
-                                <h3>${data.total_conversations || 0}</h3>
-                                <p>Total Conversations</p>
-                            </div>
-                            <div class="stat-card">
-                                <h3>$${(data.total_cost || 0).toFixed(4)}</h3>
-                                <p>Total Cost</p>
-                            </div>
-                            <div class="stat-card">
-                                <h3>${(data.success_rate || 0).toFixed(1)}%</h3>
-                                <p>Success Rate</p>
-                            </div>
-                        </div>
-                        
-                        <div class="table-container">
-                            <h3>Summary</h3>
-                            <table>
-                                <tr>
-                                    <td><strong>Total Documents</strong></td>
-                                    <td>${data.total_documents || 0}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Total Chunks</strong></td>
-                                    <td>${data.total_chunks || 0}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Avg Response Time</strong></td>
-                                    <td>${(data.avg_response_time || 0).toFixed(2)}s</td>
-                                </tr>
-                            </table>
-                        </div>
-                    `;
-                    content.innerHTML = html;
-                } else {
-                    content.innerHTML = '<div class="status-card"><p style="text-align: center; padding: 40px;">No analytics data available</p></div>';
-                }
+                // Fetch trends data
+                const trendsResponse = await fetch(`${API_BASE}/api/analytics/trends?days=${timeframe}`);
+                const trendsData = await trendsResponse.json();
+
+                // Fetch cost breakdown
+                const costResponse = await fetch(`${API_BASE}/api/analytics/cost-breakdown?days=${timeframe}`);
+                const costData = await costResponse.json();
+
+                // Hide loading
+                loading.style.display = 'none';
+
+                // Render summary cards
+                renderSummaryCards(summaryData);
+
+                // Render all charts
+                renderQueryVolumeChart(trendsData);
+                renderCostTrendChart(trendsData);
+                renderResponseTimeChart(trendsData);
+                renderSuccessRateChart(trendsData);
+                renderRAGUsageChart(trendsData);
+                renderCostBreakdownChart(costData);
+
+                console.log('Analytics loaded successfully');
             } catch (error) {
                 console.error('Failed to load analytics:', error);
-                content.innerHTML = '<div class="status-card"><p style="text-align: center; padding: 40px; color: #e74c3c;">Error loading analytics</p></div>';
+                loading.innerHTML = '<p style="text-align: center; padding: 40px; color: #e74c3c;">Error loading analytics</p>';
+            }
+        }
+
+        // Render executive summary cards
+        function renderSummaryCards(data) {
+            const container = document.getElementById('analytics-summary-cards');
+            container.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>${data.total_queries || 0}</h3>
+                        <p>Total Queries</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>${data.total_conversations || 0}</h3>
+                        <p>Conversations</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>$${(data.total_cost || 0).toFixed(4)}</h3>
+                        <p>Total Cost</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>${(data.success_rate || 0).toFixed(1)}%</h3>
+                        <p>Success Rate</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>${data.total_documents || 0}</h3>
+                        <p>Documents</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>${data.total_chunks || 0}</h3>
+                        <p>Doc Chunks</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>${(data.avg_response_time || 0).toFixed(2)}s</h3>
+                        <p>Avg Response Time</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Query Volume Chart (Bar + Line)
+        function renderQueryVolumeChart(data) {
+            destroyChart('queryVolumeChart');
+            const ctx = document.getElementById('queryVolumeChart').getContext('2d');
+
+            analyticsCharts.queryVolumeChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.dates,
+                    datasets: [{
+                        label: 'Daily Queries',
+                        data: data.queries,
+                        backgroundColor: 'rgba(255, 110, 0, 0.7)',
+                        borderColor: 'rgba(255, 110, 0, 1)',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Cost Trend Chart (Line)
+        function renderCostTrendChart(data) {
+            destroyChart('costTrendChart');
+            const ctx = document.getElementById('costTrendChart').getContext('2d');
+
+            analyticsCharts.costTrendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.dates,
+                    datasets: [{
+                        label: 'Daily Cost ($)',
+                        data: data.costs,
+                        backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                        borderColor: 'rgba(231, 76, 60, 1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toFixed(4);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Response Time Chart (Line with area)
+        function renderResponseTimeChart(data) {
+            destroyChart('responseTimeChart');
+            const ctx = document.getElementById('responseTimeChart').getContext('2d');
+
+            analyticsCharts.responseTimeChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.dates,
+                    datasets: [{
+                        label: 'Avg Response Time (s)',
+                        data: data.response_times,
+                        backgroundColor: 'rgba(52, 152, 219, 0.2)',
+                        borderColor: 'rgba(52, 152, 219, 1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toFixed(2) + 's';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Success Rate Chart (Area)
+        function renderSuccessRateChart(data) {
+            destroyChart('successRateChart');
+            const ctx = document.getElementById('successRateChart').getContext('2d');
+
+            analyticsCharts.successRateChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.dates,
+                    datasets: [{
+                        label: 'Success Rate (%)',
+                        data: data.success_rates,
+                        backgroundColor: 'rgba(46, 204, 113, 0.3)',
+                        borderColor: 'rgba(46, 204, 113, 1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // RAG Usage Chart (Line)
+        function renderRAGUsageChart(data) {
+            destroyChart('ragUsageChart');
+            const ctx = document.getElementById('ragUsageChart').getContext('2d');
+
+            analyticsCharts.ragUsageChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.dates,
+                    datasets: [{
+                        label: 'RAG Usage (%)',
+                        data: data.rag_usage,
+                        backgroundColor: 'rgba(155, 89, 182, 0.2)',
+                        borderColor: 'rgba(155, 89, 182, 1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Cost Breakdown Pie Chart
+        function renderCostBreakdownChart(costData) {
+            destroyChart('costBreakdownChart');
+            const ctx = document.getElementById('costBreakdownChart').getContext('2d');
+
+            const models = costData.by_model || [];
+            const labels = models.map(m => m.model_used || 'Unknown');
+            const costs = models.map(m => m.total_cost || 0);
+
+            const colors = [
+                'rgba(255, 110, 0, 0.8)',
+                'rgba(52, 152, 219, 0.8)',
+                'rgba(46, 204, 113, 0.8)',
+                'rgba(155, 89, 182, 0.8)',
+                'rgba(241, 196, 15, 0.8)',
+                'rgba(231, 76, 60, 0.8)'
+            ];
+
+            analyticsCharts.costBreakdownChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: costs,
+                        backgroundColor: colors.slice(0, models.length),
+                        borderWidth: 2,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    return label + ': $' + value.toFixed(4);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Helper function to destroy existing chart
+        function destroyChart(chartId) {
+            if (analyticsCharts[chartId]) {
+                analyticsCharts[chartId].destroy();
+                delete analyticsCharts[chartId];
             }
         }
 

@@ -1339,12 +1339,82 @@ async def get_cost_breakdown(days: int = 30):
     """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
-    
+
     try:
         breakdown = app_state.analytics_db.get_cost_breakdown(days=days)
         return JSONResponse(content=breakdown)
     except Exception as e:
         logger.error(f"Failed to get cost breakdown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics/trends")
+async def get_analytics_trends(days: int = 30):
+    """
+    Get daily analytics trends for charting
+    Returns time-series data for queries, costs, response times, and success rates
+    """
+    if not app_state.analytics_db:
+        raise HTTPException(status_code=503, detail="Analytics not available")
+
+    try:
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with app_state.analytics_db._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Get daily stats for the time period
+            cursor.execute("""
+                SELECT
+                    date,
+                    total_queries,
+                    total_cost,
+                    avg_response_time,
+                    success_count,
+                    failure_count,
+                    rag_queries,
+                    total_input_tokens,
+                    total_output_tokens
+                FROM daily_stats
+                WHERE date >= date(?)
+                ORDER BY date ASC
+            """, (cutoff_date,))
+
+            rows = cursor.fetchall()
+
+            # Format data for charting
+            dates = []
+            queries = []
+            costs = []
+            response_times = []
+            success_rates = []
+            rag_usage = []
+
+            for row in rows:
+                dates.append(row[0])
+                queries.append(row[1])
+                costs.append(float(row[2]) if row[2] else 0)
+                response_times.append(float(row[3]) if row[3] else 0)
+
+                # Calculate success rate
+                total = row[4] + row[5]
+                success_rate = (row[4] / total * 100) if total > 0 else 0
+                success_rates.append(round(success_rate, 2))
+
+                # Calculate RAG usage percentage
+                rag_percentage = (row[6] / row[1] * 100) if row[1] > 0 else 0
+                rag_usage.append(round(rag_percentage, 2))
+
+            return JSONResponse(content={
+                "dates": dates,
+                "queries": queries,
+                "costs": costs,
+                "response_times": response_times,
+                "success_rates": success_rates,
+                "rag_usage": rag_usage
+            })
+
+    except Exception as e:
+        logger.error(f"Failed to get analytics trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/export")
