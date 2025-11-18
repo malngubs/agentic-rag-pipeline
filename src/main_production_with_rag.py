@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from dataclasses import asdict
 import json
 
 import uvicorn
@@ -26,6 +27,29 @@ from pydantic import BaseModel, Field, ConfigDict
 
 # Import our RAG system
 from rag_components import RAGSystem, RAGConfig
+
+# ✨ PHASE 5 IMPORTS - Configuration & Advanced Features
+try:
+    from config_manager import ConfigurationManager, set_config_manager, get_config_manager
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    logging.warning("⚠️ config_manager.py not found - configuration features disabled")
+
+# ✨ PHASE 3 IMPORTS - Advanced Document Management
+try:
+    from document_versions import DocumentVersionManager, set_version_manager, get_version_manager
+    VERSIONS_AVAILABLE = True
+except ImportError:
+    VERSIONS_AVAILABLE = False
+    logging.warning("⚠️ document_versions.py not found - version control disabled")
+
+try:
+    from document_tags import DocumentTagManager
+    TAGS_AVAILABLE = True
+except ImportError:
+    TAGS_AVAILABLE = False
+    logging.warning("⚠️ document_tags.py not found - document tagging disabled")
 
 # ✨ PHASE 1 IMPORTS - New functionality
 try:
@@ -223,27 +247,50 @@ class ApplicationState:
                 logger.error(f"❌ Citation builder initialization failed: {e}")
                 self.citation_builder = None
 
-        # ✨ PHASE 2: Authentication system
-        self.auth_manager = None
-        if AUTH_AVAILABLE:
+        # ✨ PHASE 5: Configuration manager
+        self.config_manager = None
+        if CONFIG_AVAILABLE:
             try:
-                self.auth_manager = AuthManager(db_path="data/auth.db")
-                set_auth_manager(self.auth_manager)  # Set global instance
-                logger.info("✅ Authentication system initialized: data/auth.db")
-            except Exception as e:
-                logger.error(f"❌ Authentication system initialization failed: {e}")
-                self.auth_manager = None
+                self.config_manager = ConfigurationManager(config_path="data/system_config.json")
+                set_config_manager(self.config_manager)  # Set global instance
+                logger.info("✅ Configuration manager initialized: data/system_config.json")
 
-        # ✨ PHASE 2: Audit logging system
-        self.audit_logger = None
-        if AUDIT_AVAILABLE:
-            try:
-                self.audit_logger = AuditLogger(db_path="data/audit_log.db")
-                set_audit_logger(self.audit_logger)
-                logger.info("✅ Audit logging system initialized: data/audit_log.db")
+                # Update RAG config with saved settings
+                saved_config = self.config_manager.get_config()
+                if saved_config.get('llm_model'):
+                    config.openai_model = saved_config['llm_model']
+                    logger.info(f"✅ LLM model set to: {config.openai_model}")
+                if saved_config.get('temperature'):
+                    config.temperature = saved_config['temperature']
+                if saved_config.get('max_tokens'):
+                    config.max_tokens = saved_config['max_tokens']
             except Exception as e:
-                logger.error(f"❌ Audit logging system initialization failed: {e}")
-                self.audit_logger = None
+                logger.error(f"❌ Configuration manager initialization failed: {e}")
+                self.config_manager = None
+
+        # ✨ PHASE 3: Document version manager
+        self.version_manager = None
+        if VERSIONS_AVAILABLE:
+            try:
+                self.version_manager = DocumentVersionManager(
+                    db_path="data/document_versions.db",
+                    storage_path="data/document_versions"
+                )
+                set_version_manager(self.version_manager)  # Set global instance
+                logger.info("✅ Document version manager initialized")
+            except Exception as e:
+                logger.error(f"❌ Document version manager initialization failed: {e}")
+                self.version_manager = None
+
+        # ✨ PHASE 4: Document tag manager
+        self.tag_manager = None
+        if TAGS_AVAILABLE:
+            try:
+                self.tag_manager = DocumentTagManager(storage_path="data/document_tags.json")
+                logger.info("✅ Document tag manager initialized")
+            except Exception as e:
+                logger.error(f"❌ Document tag manager initialization failed: {e}")
+                self.tag_manager = None
 
         self.startup_complete = False
     
@@ -750,45 +797,70 @@ async def upload_document(
                 chunks_created=None
             )
         
-        # Process document
-        processed = await app_state.rag_system.process_document(file_path, content)
-        
-        if processed:
-            status = await app_state.rag_system.get_system_status()
-            chunks_created = status.get('total_chunks', 0)
-            
-            # ✨ PHASE 1: Log document upload to analytics
-            if app_state.analytics_db:
-                try:
-                    app_state.analytics_db.log_document_upload(
-                        filename=file.filename,
-                        file_size=file_size,
-                        chunks_created=chunks_created,
-                        success=True
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log upload to analytics: {e}")
+        # Save file temporarily for version storage
+        import tempfile
+        temp_file = None
+        document_id = None
 
-            # ✨ PHASE 2: Log document upload to audit log
-            if app_state.audit_logger:
-                try:
-                    app_state.audit_logger.log_document_event(
-                        action=app_state.audit_logger.ACTION_UPLOAD,
-                        user_id=current_user.id,
-                        user_email=current_user.email,
-                        document_name=file.filename,
-                        metadata={
-                            'file_size': file_size,
-                            'chunks_created': chunks_created,
-                            'file_extension': file_extension
-                        }
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log upload to audit: {e}")
+        try:
+            # Create temp file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
+            temp_file.write(content)
+            temp_file.close()
 
-            message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
-        else:
-            message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
+            # Generate document ID from filename
+            import hashlib
+            document_id = hashlib.md5(file.filename.encode()).hexdigest()[:16]
+
+            # Process document
+            processed = await app_state.rag_system.process_document(file_path, content)
+
+            if processed:
+                status = await app_state.rag_system.get_system_status()
+                chunks_created = status.get('total_chunks', 0)
+
+                # ✨ PHASE 3: Create document version
+                if app_state.version_manager:
+                    try:
+                        version = app_state.version_manager.create_version(
+                            document_id=document_id,
+                            file_path=temp_file.name,
+                            file_name=file.filename,
+                            file_size=file_size,
+                            uploaded_by=None,  # TODO: Get from auth context
+                            chunks_count=chunks_created,
+                            metadata={
+                                'file_extension': file_extension,
+                                'original_name': file.filename
+                            },
+                            change_description="New upload"
+                        )
+                        logger.info(f"✅ Created version {version.version_number} for document {document_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create document version: {e}")
+
+                # ✨ PHASE 1: Log document upload to analytics
+                if app_state.analytics_db:
+                    try:
+                        app_state.analytics_db.log_document_upload(
+                            filename=file.filename,
+                            file_size=file_size,
+                            chunks_created=chunks_created,
+                            success=True
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log upload to analytics: {e}")
+
+                message = f"Document '{file.filename}' uploaded and successfully processed for RAG search!"
+            else:
+                message = f"Document '{file.filename}' uploaded but processing failed. Check server logs."
+        finally:
+            # Cleanup temp file
+            if temp_file and Path(temp_file.name).exists():
+                try:
+                    Path(temp_file.name).unlink()
+                except:
+                    pass
         
         return UploadResponse(
             message=message,
@@ -863,6 +935,90 @@ async def delete_document(doc_id: str):
     except Exception as e:
         logger.error(f"Failed to delete document: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+# =============================================================================
+# ✨ PHASE 4: DOCUMENT TAGGING ENDPOINTS
+# =============================================================================
+
+@app.post("/api/documents/{doc_id}/tags")
+async def add_document_tags(doc_id: str, tags: List[str]):
+    """Add tags to a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        updated_tags = app_state.tag_manager.add_tags(doc_id, tags)
+        return JSONResponse(content={"success": True, "doc_id": doc_id, "tags": updated_tags})
+    except Exception as e:
+        logger.error(f"Failed to add tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/documents/{doc_id}/tags/{tag}")
+async def remove_document_tag(doc_id: str, tag: str):
+    """Remove a tag from a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        updated_tags = app_state.tag_manager.remove_tag(doc_id, tag)
+        return JSONResponse(content={"success": True, "doc_id": doc_id, "tags": updated_tags})
+    except Exception as e:
+        logger.error(f"Failed to remove tag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/documents/{doc_id}/tags")
+async def get_document_tags(doc_id: str):
+    """Get all tags for a document"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tags = app_state.tag_manager.get_tags(doc_id)
+        return JSONResponse(content={"doc_id": doc_id, "tags": tags})
+    except Exception as e:
+        logger.error(f"Failed to get tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags")
+async def get_all_tags():
+    """Get all unique tags in the system"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tags = app_state.tag_manager.get_all_tags()
+        tag_stats = app_state.tag_manager.get_tag_stats()
+        return JSONResponse(content={"tags": tags, "tag_stats": tag_stats, "total_tags": len(tags)})
+    except Exception as e:
+        logger.error(f"Failed to get tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags/autocomplete")
+async def autocomplete_tags(prefix: str = "", limit: int = 10):
+    """Get tag suggestions for autocomplete"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        suggestions = app_state.tag_manager.autocomplete_tags(prefix, limit)
+        return JSONResponse(content={"prefix": prefix, "suggestions": suggestions})
+    except Exception as e:
+        logger.error(f"Failed to autocomplete tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags/search")
+async def search_by_tags(tags: str, match_all: bool = False):
+    """Find documents that have specific tags"""
+    if not app_state.tag_manager:
+        raise HTTPException(status_code=503, detail="Tag manager not available")
+
+    try:
+        tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+        matching_docs = app_state.tag_manager.search_by_tags(tag_list, match_all)
+        return JSONResponse(content={"tags": tag_list, "matching_documents": matching_docs, "count": len(matching_docs)})
+    except Exception as e:
+        logger.error(f"Failed to search by tags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
 # 💬 CHAT ENDPOINTS
@@ -1396,33 +1552,42 @@ async def get_conversations(
 
 @app.get("/api/conversations/search")
 async def search_conversations(
-    query: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    q: str = None,
+    start_date: str = None,
+    end_date: str = None,
     limit: int = 50,
     offset: int = 0
 ):
-    """Search conversations by various criteria"""
+    """
+    Search conversations by keyword and/or date range
+
+    Args:
+        q: Search query (searches in both query and response text)
+        start_date: Filter by start date (YYYY-MM-DD format)
+        end_date: Filter by end date (YYYY-MM-DD format)
+        limit: Maximum results to return (default 50)
+        offset: Offset for pagination (default 0)
+
+    Returns:
+        Dictionary with conversations list, total count, and pagination info
+    """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
 
     try:
         result = app_state.analytics_db.search_conversations(
-            query=query,
-            conversation_id=conversation_id,
-            user_id=user_id,
+            search_query=q,
             start_date=start_date,
             end_date=end_date,
             limit=limit,
             offset=offset
         )
 
-        return result
+        return JSONResponse(content=result)
+
     except Exception as e:
         logger.error(f"Failed to search conversations: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to search conversations: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
 async def get_analytics_summary(current_user: UserResponse = Depends(require_viewer)):
@@ -1486,19 +1651,74 @@ async def get_cost_breakdown(days: int = 30, current_user: UserResponse = Depend
         logger.error(f"Failed to get cost breakdown: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/analytics/daily-stats")
-async def get_daily_stats(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
+@app.get("/api/analytics/trends")
+async def get_analytics_trends(days: int = 30):
     """
-    Get daily statistics for time-series charts (requires authentication)
+    Get daily analytics trends for charting
+    Returns time-series data for queries, costs, response times, and success rates
     """
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
 
     try:
-        stats = app_state.analytics_db.get_daily_stats(days=days)
-        return JSONResponse(content={"daily_stats": stats, "days": days})
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with app_state.analytics_db._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Get daily stats for the time period
+            cursor.execute("""
+                SELECT
+                    date,
+                    total_queries,
+                    total_cost,
+                    avg_response_time,
+                    success_count,
+                    failure_count,
+                    rag_queries,
+                    total_input_tokens,
+                    total_output_tokens
+                FROM daily_stats
+                WHERE date >= date(?)
+                ORDER BY date ASC
+            """, (cutoff_date,))
+
+            rows = cursor.fetchall()
+
+            # Format data for charting
+            dates = []
+            queries = []
+            costs = []
+            response_times = []
+            success_rates = []
+            rag_usage = []
+
+            for row in rows:
+                dates.append(row[0])
+                queries.append(row[1])
+                costs.append(float(row[2]) if row[2] else 0)
+                response_times.append(float(row[3]) if row[3] else 0)
+
+                # Calculate success rate
+                total = row[4] + row[5]
+                success_rate = (row[4] / total * 100) if total > 0 else 0
+                success_rates.append(round(success_rate, 2))
+
+                # Calculate RAG usage percentage
+                rag_percentage = (row[6] / row[1] * 100) if row[1] > 0 else 0
+                rag_usage.append(round(rag_percentage, 2))
+
+            return JSONResponse(content={
+                "dates": dates,
+                "queries": queries,
+                "costs": costs,
+                "response_times": response_times,
+                "success_rates": success_rates,
+                "rag_usage": rag_usage
+            })
+
     except Exception as e:
-        logger.error(f"Failed to get daily stats: {e}")
+        logger.error(f"Failed to get analytics trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/export")
@@ -1546,93 +1766,373 @@ async def export_analytics(format: str = "json"):
         raise HTTPException(status_code=500, detail=f"Failed to export data: {str(e)}")
 
 # =============================================================================
-# 📋 AUDIT LOG ENDPOINTS (PHASE 2)
+# ✨ PHASE 5: CONFIGURATION API ENDPOINTS
 # =============================================================================
 
-@app.get("/api/audit/logs")
-async def get_audit_logs(
-    user_id: Optional[int] = None,
-    category: Optional[str] = None,
-    action: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    status: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
-    current_user: UserResponse = Depends(require_admin)
-):
-    """Get audit logs with filters (admin only)"""
-    if not app_state.audit_logger:
-        raise HTTPException(status_code=503, detail="Audit logging not available")
+@app.get("/api/config")
+async def get_configuration():
+    """Get current system configuration"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
 
     try:
-        result = app_state.audit_logger.get_logs(
-            user_id=user_id,
-            category=category,
-            action=action,
-            start_date=start_date,
-            end_date=end_date,
-            status=status,
-            limit=limit,
-            offset=offset
+        config = app_state.config_manager.get_config()
+        return JSONResponse(content=config)
+    except Exception as e:
+        logger.error(f"Failed to get configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config")
+async def update_configuration(updates: Dict[str, Any]):
+    """Update system configuration"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        # Update configuration
+        updated_config = app_state.config_manager.update_config(updates)
+
+        # If LLM model was updated, update the RAG system
+        if 'llm_model' in updates:
+            app_state.rag_system.config.openai_model = updates['llm_model']
+            logger.info(f"✅ Updated RAG system LLM model to: {updates['llm_model']}")
+
+        # If temperature or max_tokens were updated, update RAG system
+        if 'temperature' in updates:
+            app_state.rag_system.config.temperature = updates['temperature']
+        if 'max_tokens' in updates:
+            app_state.rag_system.config.max_tokens = updates['max_tokens']
+
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/models")
+async def get_available_models():
+    """Get list of available LLM models"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        models = app_state.config_manager.get_available_models()
+        current_model = app_state.config_manager.get_current_model()
+        return JSONResponse(content={
+            "models": models,
+            "current_model": current_model
+        })
+    except Exception as e:
+        logger.error(f"Failed to get available models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/model")
+async def set_llm_model(model_data: Dict[str, str]):
+    """Set LLM model"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    model_id = model_data.get('model_id')
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+
+    try:
+        updated_config = app_state.config_manager.set_model(model_id)
+
+        # Update RAG system
+        app_state.rag_system.config.openai_model = model_id
+        logger.info(f"✅ Updated LLM model to: {model_id}")
+
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/confidence-threshold")
+async def set_confidence_threshold(threshold_data: Dict[str, float]):
+    """Set confidence threshold"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    threshold = threshold_data.get('threshold')
+    if threshold is None:
+        raise HTTPException(status_code=400, detail="threshold is required")
+
+    try:
+        updated_config = app_state.config_manager.set_confidence_threshold(threshold)
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set confidence threshold: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/prompt-template")
+async def get_prompt_template():
+    """Get system prompt template"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        template = app_state.config_manager.get_prompt_template()
+        return JSONResponse(content={"template": template})
+    except Exception as e:
+        logger.error(f"Failed to get prompt template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/prompt-template")
+async def set_prompt_template(template_data: Dict[str, str]):
+    """Set system prompt template"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    template = template_data.get('template')
+    if not template:
+        raise HTTPException(status_code=400, detail="template is required")
+
+    try:
+        updated_config = app_state.config_manager.set_prompt_template(template)
+        return JSONResponse(content=updated_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to set prompt template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/reset")
+async def reset_configuration():
+    """Reset configuration to defaults"""
+    if not app_state.config_manager:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+
+    try:
+        updated_config = app_state.config_manager.reset_to_defaults()
+
+        # Update RAG system with defaults
+        app_state.rag_system.config.openai_model = updated_config['llm_model']
+        app_state.rag_system.config.temperature = updated_config['temperature']
+        app_state.rag_system.config.max_tokens = updated_config['max_tokens']
+
+        logger.info("✅ Configuration reset to defaults")
+        return JSONResponse(content=updated_config)
+    except Exception as e:
+        logger.error(f"Failed to reset configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# ✨ PHASE 3: DOCUMENT VERSION CONTROL API ENDPOINTS
+# =============================================================================
+
+@app.get("/api/documents/{document_id}/versions")
+async def get_document_versions(document_id: str):
+    """Get all versions of a specific document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        versions = app_state.version_manager.get_versions(document_id)
+        return JSONResponse(content={
+            "document_id": document_id,
+            "versions": [asdict(v) for v in versions],
+            "total_versions": len(versions)
+        })
+    except Exception as e:
+        logger.error(f"Failed to get versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/versions/{version_number}")
+async def get_document_version(document_id: str, version_number: int):
+    """Get specific version of a document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        version = app_state.version_manager.get_version(document_id, version_number)
+        if not version:
+            raise HTTPException(status_code=404, detail=f"Version {version_number} not found")
+
+        return JSONResponse(content=asdict(version))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/{document_id}/versions/{version_number}/revert")
+async def revert_to_version(document_id: str, version_number: int):
+    """Revert document to a specific version"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Revert to version (creates new version from old one)
+        new_version = app_state.version_manager.revert_to_version(
+            document_id=document_id,
+            version_number=version_number,
+            reverted_by=None  # TODO: Get from auth context
         )
-        return JSONResponse(content=result)
+
+        # TODO: Re-process document with RAG system to update embeddings
+        logger.info(f"✅ Reverted document {document_id} to version {version_number}")
+
+        return JSONResponse(content={
+            "message": f"Successfully reverted to version {version_number}",
+            "new_version": asdict(new_version)
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to get audit logs: {e}")
+        logger.error(f"Failed to revert version: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/audit/statistics")
-async def get_audit_statistics(
-    days: int = 30,
-    current_user: UserResponse = Depends(require_admin)
-):
-    """Get audit log statistics (admin only)"""
-    if not app_state.audit_logger:
-        raise HTTPException(status_code=503, detail="Audit logging not available")
+@app.delete("/api/documents/{document_id}/versions/{version_number}")
+async def delete_document_version(document_id: str, version_number: int):
+    """Delete a specific version (cannot delete current version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
 
     try:
-        stats = app_state.audit_logger.get_statistics(days=days)
-        return JSONResponse(content=stats)
+        success = app_state.version_manager.delete_version(document_id, version_number)
+        if success:
+            return JSONResponse(content={
+                "message": f"Version {version_number} deleted successfully"
+            })
+        else:
+            raise HTTPException(status_code=404, detail=f"Version {version_number} not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to get audit statistics: {e}")
+        logger.error(f"Failed to delete version: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/audit/user/{user_id}")
-async def get_user_audit_logs(
-    user_id: int,
-    days: int = 30,
-    current_user: UserResponse = Depends(require_admin)
-):
-    """Get audit logs for a specific user (admin only)"""
-    if not app_state.audit_logger:
-        raise HTTPException(status_code=503, detail="Audit logging not available")
+@app.get("/api/documents/with-versions")
+async def get_all_documents_with_versions():
+    """Get all documents with their version information"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
 
     try:
-        logs = app_state.audit_logger.get_user_activity(user_id=user_id, days=days)
-        return JSONResponse(content={'logs': logs, 'user_id': user_id, 'days': days})
+        documents = app_state.version_manager.get_all_documents_with_versions()
+        return JSONResponse(content={
+            "documents": documents,
+            "total": len(documents)
+        })
     except Exception as e:
-        logger.error(f"Failed to get user audit logs: {e}")
+        logger.error(f"Failed to get documents with versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/audit/failed-logins")
-async def get_failed_logins(
-    hours: int = 24,
-    current_user: UserResponse = Depends(require_admin)
-):
-    """Get recent failed login attempts (admin only)"""
-    if not app_state.audit_logger:
-        raise HTTPException(status_code=503, detail="Audit logging not available")
+@app.get("/api/documents/{document_id}/versions/current")
+async def get_current_version(document_id: str):
+    """Get current version of a document"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
 
     try:
-        logs = app_state.audit_logger.get_failed_logins(hours=hours)
-        return JSONResponse(content={'logs': logs, 'hours': hours})
+        version = app_state.version_manager.get_current_version(document_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        return JSONResponse(content=asdict(version))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to get failed logins: {e}")
+        logger.error(f"Failed to get current version: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/documents/{document_id}/preview")
+async def preview_document(document_id: str, version: Optional[int] = None):
+    """Serve document file for preview (current version or specific version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Get version to preview
+        if version is not None:
+            doc_version = app_state.version_manager.get_version(document_id, version)
+        else:
+            doc_version = app_state.version_manager.get_current_version(document_id)
+
+        if not doc_version:
+            raise HTTPException(status_code=404, detail="Document or version not found")
+
+        # Serve file
+        file_path = Path(doc_version.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+        # Determine media type
+        media_types = {
+            '.pdf': 'application/pdf',
+            '.txt': 'text/plain',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.xls': 'application/vnd.ms-excel'
+        }
+
+        file_ext = file_path.suffix.lower()
+        media_type = media_types.get(file_ext, 'application/octet-stream')
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=media_type,
+            filename=doc_version.file_name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve document for preview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/download")
+async def download_document(document_id: str, version: Optional[int] = None):
+    """Download document file (current version or specific version)"""
+    if not app_state.version_manager:
+        raise HTTPException(status_code=503, detail="Version control not available")
+
+    try:
+        # Get version to download
+        if version is not None:
+            doc_version = app_state.version_manager.get_version(document_id, version)
+        else:
+            doc_version = app_state.version_manager.get_current_version(document_id)
+
+        if not doc_version:
+            raise HTTPException(status_code=404, detail="Document or version not found")
+
+        # Serve file for download
+        file_path = Path(doc_version.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+        return FileResponse(
+            path=str(file_path),
+            filename=doc_version.file_name,
+            media_type='application/octet-stream'
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve document for download: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER

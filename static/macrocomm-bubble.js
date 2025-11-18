@@ -28,13 +28,18 @@ class MacrocommBubbleChatbot {
         
         // State
         this.isOpen = false;
-        this.conversationId = this.generateUUID();
         this.ws = null;
         this.wsReconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
         this.isStreaming = false;
         this.currentStreamingMessageEl = null;
-        
+
+        // ✨ PHASE 5: Multi-Conversation Tabs
+        this.tabs = [];
+        this.activeTabIndex = 0;
+        this.tabCounter = 1;
+        this.createInitialTab();
+
         // Voice recognition
         this.recognition = null;
         this.isListening = false;
@@ -50,14 +55,169 @@ class MacrocommBubbleChatbot {
     }
     
     init() {
-        console.log('🚀 Initializing Macrocomm Chatbot (Enhanced)');
+        console.log('🚀 Initializing Macrocomm Chatbot (Enhanced with Tabs)');
         this.createBubble();
         this.createChatWindow();
         this.setupWebSocket();
         this.setupVoiceRecognition();
         this.setupKeyboardShortcuts();
     }
-    
+
+    // =========================================================================
+    // ✨ TAB MANAGEMENT (Phase 5)
+    // =========================================================================
+
+    createInitialTab() {
+        this.tabs.push({
+            id: this.generateUUID(),
+            conversationId: this.generateUUID(),
+            name: `Chat ${this.tabCounter}`,
+            messages: [],
+            createdAt: new Date()
+        });
+    }
+
+    createNewTab() {
+        this.tabCounter++;
+        const newTab = {
+            id: this.generateUUID(),
+            conversationId: this.generateUUID(),
+            name: `Chat ${this.tabCounter}`,
+            messages: [],
+            createdAt: new Date()
+        };
+        this.tabs.push(newTab);
+        this.activeTabIndex = this.tabs.length - 1;
+        this.renderTabs();
+        this.renderMessages();
+        this.scrollToBottom();
+
+        // Send welcome message for new tab
+        setTimeout(() => this.addBotMessage('Hello! I\'m your AI assistant. How can I help you today?'), 300);
+    }
+
+    switchTab(index) {
+        if (index >= 0 && index < this.tabs.length) {
+            this.activeTabIndex = index;
+            this.renderTabs();
+            this.renderMessages();
+            this.scrollToBottom();
+        }
+    }
+
+    closeTab(index) {
+        if (this.tabs.length <= 1) {
+            alert('Cannot close the last tab');
+            return;
+        }
+
+        this.tabs.splice(index, 1);
+
+        // Adjust active tab index
+        if (this.activeTabIndex >= this.tabs.length) {
+            this.activeTabIndex = this.tabs.length - 1;
+        } else if (this.activeTabIndex > index) {
+            this.activeTabIndex--;
+        }
+
+        this.renderTabs();
+        this.renderMessages();
+    }
+
+    renameTab(index, newName) {
+        if (index >= 0 && index < this.tabs.length) {
+            this.tabs[index].name = newName;
+            this.renderTabs();
+        }
+    }
+
+    getActiveTab() {
+        return this.tabs[this.activeTabIndex];
+    }
+
+    get conversationId() {
+        return this.getActiveTab().conversationId;
+    }
+
+    renderTabs() {
+        const tabsContainer = document.getElementById('macrocomm-tabs');
+        if (!tabsContainer) return;
+
+        tabsContainer.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 8px 12px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0;">
+                ${this.tabs.map((tab, index) => `
+                    <div class="chat-tab ${index === this.activeTabIndex ? 'active' : ''}"
+                         onclick="macrocommChat.switchTab(${index})"
+                         style="
+                            display: flex;
+                            align-items: center;
+                            gap: 6px;
+                            padding: 6px 12px;
+                            background: ${index === this.activeTabIndex ? 'white' : 'transparent'};
+                            border: 1px solid ${index === this.activeTabIndex ? '#ddd' : 'transparent'};
+                            border-radius: 8px 8px 0 0;
+                            cursor: pointer;
+                            font-size: 13px;
+                            white-space: nowrap;
+                            transition: all 0.2s;
+                            ${index === this.activeTabIndex ? 'font-weight: 600;' : ''}
+                         ">
+                        <span>${tab.name}</span>
+                        ${this.tabs.length > 1 ? `
+                            <button onclick="event.stopPropagation(); macrocommChat.closeTab(${index})"
+                                    style="
+                                        background: none;
+                                        border: none;
+                                        padding: 2px;
+                                        cursor: pointer;
+                                        opacity: 0.6;
+                                        transition: opacity 0.2s;
+                                        line-height: 1;
+                                    "
+                                    onmouseover="this.style.opacity='1'"
+                                    onmouseout="this.style.opacity='0.6'">
+                                ✕
+                            </button>
+                        ` : ''}
+                    </div>
+                `).join('')}
+                <button onclick="macrocommChat.createNewTab()"
+                        style="
+                            background: none;
+                            border: 1px solid #ddd;
+                            padding: 6px 10px;
+                            border-radius: 8px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            transition: all 0.2s;
+                            color: #666;
+                        "
+                        onmouseover="this.style.background='#e0e0e0'"
+                        onmouseout="this.style.background='none'"
+                        title="New conversation">
+                    +
+                </button>
+            </div>
+        `;
+    }
+
+    renderMessages() {
+        if (!this.messagesContainer) return;
+
+        this.messagesContainer.innerHTML = '';
+        const activeTab = this.getActiveTab();
+
+        activeTab.messages.forEach(msg => {
+            if (msg.type === 'user') {
+                this.displayUserMessage(msg.text, msg.timestamp);
+            } else if (msg.type === 'assistant') {
+                this.displayAssistantMessage(msg.text, msg.metadata, msg.timestamp);
+            } else if (msg.type === 'system') {
+                this.displaySystemMessage(msg.text, msg.level, msg.timestamp);
+            }
+        });
+    }
+
     // =========================================================================
     // 🎨 UI CREATION
     // =========================================================================
@@ -137,7 +297,12 @@ class MacrocommBubbleChatbot {
                     </svg>
                 </button>
             </div>
-            
+
+            <!-- ✨ PHASE 5: Tab Bar -->
+            <div class="chat-tabs-bar" id="macrocomm-tabs">
+                <!-- Tabs will be rendered here -->
+            </div>
+
             <div class="chat-messages" id="macrocomm-messages">
                 <!-- Messages will be added here -->
             </div>
@@ -722,25 +887,61 @@ class MacrocommBubbleChatbot {
     }
     
     addUserMessage(text) {
+        // Store message in active tab
+        const activeTab = this.getActiveTab();
+        const timestamp = new Date();
+        activeTab.messages.push({
+            type: 'user',
+            text: text,
+            timestamp: timestamp
+        });
+
+        // Display the message
+        this.displayUserMessage(text, timestamp);
+        this.scrollToBottom();
+    }
+
+    displayUserMessage(text, timestamp) {
         const messageEl = document.createElement('div');
         messageEl.className = 'message user';
         messageEl.innerHTML = `
             <div class="message-bubble">${this.escapeHtml(text)}</div>
             <div class="message-meta">
-                <span>${this.formatTime(new Date())}</span>
+                <span>${this.formatTime(timestamp)}</span>
             </div>
         `;
-        
+
         this.messagesContainer.appendChild(messageEl);
-        this.scrollToBottom();
     }
     
     addAssistantMessage(text, metadata = {}) {
+        // Store message in active tab
+        const activeTab = this.getActiveTab();
+        const timestamp = new Date();
+        activeTab.messages.push({
+            type: 'assistant',
+            text: text,
+            metadata: metadata,
+            timestamp: timestamp
+        });
+
+        // Display the message
+        this.displayAssistantMessage(text, metadata, timestamp);
+
+        // Add follow-up questions if available
+        if (this.config.enableFollowUps && metadata.follow_up_questions && metadata.follow_up_questions.length > 0) {
+            this.addFollowUpQuestions(metadata.follow_up_questions);
+        }
+
+        this.scrollToBottom();
+    }
+
+    displayAssistantMessage(text, metadata = {}, timestamp) {
         const messageEl = document.createElement('div');
         messageEl.className = 'message assistant';
-        
+
         let html = `<div class="message-bubble">${this.escapeHtml(text)}</div>`;
-        
+
         // Add citations if available
         if (metadata.citations && metadata.citations.length > 0) {
             html += '<div class="citations">';
@@ -756,16 +957,16 @@ class MacrocommBubbleChatbot {
             });
             html += '</div>';
         }
-        
+
         // Add metadata
         html += `
             <div class="message-meta">
-                <span>${this.formatTime(new Date())}</span>
+                <span>${this.formatTime(timestamp)}</span>
                 ${metadata.response_time ? `<span>• ${metadata.response_time.toFixed(2)}s</span>` : ''}
                 ${metadata.using_rag ? '<span>• RAG</span>' : ''}
             </div>
         `;
-        
+
         // Add reactions
         html += `
             <div class="message-reactions">
@@ -773,19 +974,28 @@ class MacrocommBubbleChatbot {
                 <button class="reaction-btn" onclick="macrocommChat.react(this, '👎')">👎</button>
             </div>
         `;
-        
+
         messageEl.innerHTML = html;
         this.messagesContainer.appendChild(messageEl);
-        
-        // Add follow-up questions if available
-        if (this.config.enableFollowUps && metadata.follow_up_questions && metadata.follow_up_questions.length > 0) {
-            this.addFollowUpQuestions(metadata.follow_up_questions);
-        }
-        
-        this.scrollToBottom();
     }
     
     addSystemMessage(text, level = 'info') {
+        // Store message in active tab
+        const activeTab = this.getActiveTab();
+        const timestamp = new Date();
+        activeTab.messages.push({
+            type: 'system',
+            text: text,
+            level: level,
+            timestamp: timestamp
+        });
+
+        // Display the message
+        this.displaySystemMessage(text, level, timestamp);
+        this.scrollToBottom();
+    }
+
+    displaySystemMessage(text, level = 'info', timestamp) {
         const messageEl = document.createElement('div');
         messageEl.className = 'message system';
         messageEl.innerHTML = `
@@ -800,9 +1010,13 @@ class MacrocommBubbleChatbot {
                 ${this.escapeHtml(text)}
             </div>
         `;
-        
+
         this.messagesContainer.appendChild(messageEl);
-        this.scrollToBottom();
+    }
+
+    // Alias for backward compatibility
+    addBotMessage(text, metadata = {}) {
+        this.addAssistantMessage(text, metadata);
     }
     
     showTypingIndicator() {
@@ -1021,8 +1235,11 @@ class MacrocommBubbleChatbot {
     toggleChat() {
         this.isOpen = !this.isOpen;
         this.chatWindow.style.display = this.isOpen ? 'flex' : 'none';
-        
+
         if (this.isOpen) {
+            // Render tabs and messages when opening
+            this.renderTabs();
+            this.renderMessages();
             this.inputField.focus();
         }
     }
