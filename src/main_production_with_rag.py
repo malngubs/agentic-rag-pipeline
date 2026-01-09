@@ -5,6 +5,10 @@ Integrates document processing, vector search, LLM generation, conversation hist
 Version 2.2 - Phase 1 Complete: Analytics, Citations, Conversation History
 """
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
 import asyncio
 import logging
 import os
@@ -13,17 +17,30 @@ import uuid
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
 from dataclasses import asdict
 import json
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
+
+# Import data analyst module with fallback
+try:
+    from data_analyst.file_ingestor import FileIngestor
+    DATA_ANALYST_AVAILABLE = True
+except ImportError:
+    try:
+        from .data_analyst.file_ingestor import FileIngestor
+        DATA_ANALYST_AVAILABLE = True
+    except ImportError:
+        DATA_ANALYST_AVAILABLE = False
+        FileIngestor = None
+        logging.warning("⚠️ data_analyst module not available")
 
 # Import our RAG system
 from rag_components import RAGSystem, RAGConfig
@@ -83,6 +100,28 @@ try:
 except ImportError:
     AUDIT_AVAILABLE = False
     logging.warning("⚠️ audit_log.py not found - audit logging disabled")
+
+# ✨ MULTI-TENANT IMPORTS - Tenant isolation and document scoping
+try:
+    from tenant_manager import (
+        TenantManager, Tenant, TenantStatus, TenantTier, TenantUsage,
+        set_tenant_manager, get_tenant_manager, require_tenant_manager
+    )
+    TENANT_AVAILABLE = True
+except ImportError:
+    TENANT_AVAILABLE = False
+    logging.warning("⚠️ tenant_manager.py not found - multi-tenant disabled")
+
+try:
+    from document_scopes import (
+        DocumentScopeManager, DocumentScope, DocumentStatus as DocScopeStatus,
+        ScopedDocument, DocumentAccessFilter,
+        set_scope_manager, get_scope_manager, require_scope_manager
+    )
+    SCOPES_AVAILABLE = True
+except ImportError:
+    SCOPES_AVAILABLE = False
+    logging.warning("⚠️ document_scopes.py not found - document scopes disabled")
 
 # Configure logging
 logging.basicConfig(
@@ -173,6 +212,53 @@ class AnalyticsSummaryResponse(BaseModel):
     total_documents: int
     total_chunks: int
     success_rate: float
+
+# ✨ MULTI-TENANT MODELS
+
+class TenantCreate(BaseModel):
+    """Request to create a new tenant (client company)"""
+    name: str = Field(..., min_length=2, max_length=100, description="Company name")
+    domain: Optional[str] = Field(None, description="Primary email domain (e.g., acme.com)")
+    tier: str = Field(default="starter", description="Subscription tier: starter, professional, enterprise")
+
+
+class TenantResponse(BaseModel):
+    """Tenant information response"""
+    id: str
+    name: str
+    slug: str
+    domain: Optional[str]
+    status: str
+    tier: str
+    created_at: str
+    qdrant_collection: str
+    limits: Dict[str, int]
+
+
+class TenantCreateResponse(BaseModel):
+    """Response after creating a tenant - includes API key (shown only once!)"""
+    tenant: TenantResponse
+    api_key: str  # ⚠️ Only returned once at creation!
+    message: str
+
+
+class ScopedDocumentUpload(BaseModel):
+    """Document upload request with scope"""
+    scope: str = Field(default="personal", description="Document scope: 'company' or 'personal'")
+    tags: Optional[List[str]] = Field(default=[], description="Document tags")
+    description: Optional[str] = Field(default="", description="Document description")
+
+
+class ScopedDocumentResponse(BaseModel):
+    """Scoped document response"""
+    id: str
+    filename: str
+    scope: str
+    status: str
+    file_size: int
+    chunk_count: int
+    created_at: str
+    is_searchable: bool
 
 # =============================================================================
 # 🔌 WEBSOCKET CONNECTION MANAGER
@@ -292,6 +378,33 @@ class ApplicationState:
                 logger.error(f"❌ Document tag manager initialization failed: {e}")
                 self.tag_manager = None
 
+        # ✨ PHASE 2: Authentication & Audit (Disabled for testing)
+        self.auth_manager = None
+        self.audit_logger = None
+        # Note: Authentication is disabled for testing purposes
+
+        # ✨ MULTI-TENANT: Tenant manager for client isolation
+        self.tenant_manager = None
+        if TENANT_AVAILABLE:
+            try:
+                self.tenant_manager = TenantManager(db_path="data/tenants.db")
+                set_tenant_manager(self.tenant_manager)
+                logger.info("✅ Tenant manager initialized: data/tenants.db")
+            except Exception as e:
+                logger.error(f"❌ Tenant manager initialization failed: {e}")
+                self.tenant_manager = None
+
+        # ✨ MULTI-TENANT: Document scope manager for company vs personal docs
+        self.scope_manager = None
+        if SCOPES_AVAILABLE:
+            try:
+                self.scope_manager = DocumentScopeManager(db_path="data/document_scopes.db")
+                set_scope_manager(self.scope_manager)
+                logger.info("✅ Document scope manager initialized")
+            except Exception as e:
+                logger.error(f"❌ Document scope manager initialization failed: {e}")
+                self.scope_manager = None
+
         self.startup_complete = False
     
     async def initialize_components(self):
@@ -345,7 +458,10 @@ class ApplicationState:
             "total_conversations": len(self.conversations),
             # Phase 1 status
             "analytics_enabled": self.analytics_db is not None,
-            "citations_enabled": self.citation_builder is not None
+            "citations_enabled": self.citation_builder is not None,
+            # ✨ Multi-tenant status
+            "multi_tenant_enabled": self.tenant_manager is not None,
+            "document_scopes_enabled": self.scope_manager is not None,
         }
 
 # Global application state
@@ -464,14 +580,16 @@ async def root():
         "llm_provider": "OpenAI GPT-4o-mini",
         "phase_1_features": ["conversation_history", "analytics", "cost_tracking", "enhanced_citations"],
         "capabilities": [
-            "real_time_chat", 
-            "document_processing", 
-            "vector_search", 
-            "llm_generation", 
+            "real_time_chat",
+            "document_processing",
+            "vector_search",
+            "llm_generation",
             "document_management",
             "conversation_history",  # ✨ Phase 1
             "usage_analytics",        # ✨ Phase 1
-            "cost_tracking"           # ✨ Phase 1
+            "cost_tracking",          # ✨ Phase 1
+            "multi_tenant",           # ✨ Multi-Tenant
+            "document_scopes",        # ✨ Multi-Tenant
         ],
         "endpoints": {
             "health": "/health",
@@ -485,6 +603,16 @@ async def root():
             "conversations": "/api/conversations",
             "analytics_summary": "/api/analytics/summary",
             "analytics_export": "/api/analytics/export",
+            # ✨ Multi-Tenant endpoints
+            "tenants_create": "/api/tenants",
+            "tenants_list": "/api/tenants",
+            "tenant_get": "/api/tenants/{tenant_id}",
+            "tenant_usage": "/api/tenants/{tenant_id}/usage",
+            "validate_api_key": "/api/auth/validate-key",
+            "documents_scoped": "/api/documents/scoped",
+            "upload_scoped": "/api/documents/upload-scoped",
+            # Frontend endpoints
+            "workspace": "/workspace",
             "docs": "/docs",
             "widget_demo": "/frontend/widget/demo.html",
             "admin": "/frontend/widget/admin.html"
@@ -574,6 +702,52 @@ async def serve_login():
         logger.error(f"Error serving login.html: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/workspace", response_class=HTMLResponse)
+@app.get("/workspace.html", response_class=HTMLResponse)
+async def workspace():
+    """Serve the Data Analysis Workspace"""
+    possible_paths = [
+        Path("../workspace.html"),
+        Path("workspace.html"),
+        Path("./workspace.html"),
+        Path(__file__).parent / "workspace.html",
+        Path(__file__).parent.parent / "workspace.html"
+    ]
+
+    for path in possible_paths:
+        if path.exists():
+            logger.info(f"Serving workspace.html from: {path}")
+            return HTMLResponse(content=path.read_text(), status_code=200)
+
+    logger.warning("workspace.html not found in any expected location")
+    return HTMLResponse(
+        content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Workspace Not Found</title>
+            <style>
+                body { font-family: -apple-system, sans-serif; padding: 60px; text-align: center; background: #f5f5f5; }
+                .container { background: white; padding: 40px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                h1 { color: #FF6E00; }
+                p { color: #666; margin: 15px 0; }
+                a { color: #FF6E00; text-decoration: none; font-weight: 600; }
+                a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>📊 Data Analysis Workspace</h1>
+                <p>workspace.html not found in project root.</p>
+                <p>Download it from Claude and place it in the same folder as admin.html</p>
+                <p><a href="/admin.html">← Back to Admin Dashboard</a></p>
+            </div>
+        </body>
+        </html>
+        """,
+        status_code=404
+    )
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -611,6 +785,13 @@ async def health_check():
             },
             "citations": {
                 "status": "healthy" if status["citations_enabled"] else "disabled"
+            },
+            # ✨ Multi-tenant components
+            "multi_tenant": {
+                "status": "healthy" if status.get("multi_tenant_enabled") else "disabled"
+            },
+            "document_scopes": {
+                "status": "healthy" if status.get("document_scopes_enabled") else "disabled"
             }
         }
     )
@@ -639,114 +820,116 @@ async def rag_status():
         }
 
 # =============================================================================
-# 🔐 AUTHENTICATION ENDPOINTS (PHASE 2)
+# 🔐 AUTHENTICATION ENDPOINTS (PHASE 2) - DISABLED FOR TESTING
 # =============================================================================
+# Authentication endpoints are commented out for testing purposes
+# Uncomment and configure properly when ready for production
 
-@app.post("/api/auth/register", response_model=TokenResponse)
-async def register(user_data: UserCreate):
-    """Register a new user account"""
-    if not app_state.auth_manager:
-        raise HTTPException(status_code=503, detail="Authentication not available")
-
-    try:
-        # Create user
-        user = app_state.auth_manager.create_user(user_data)
-
-        # Generate token
-        token = app_state.auth_manager.create_access_token(
-            user_id=user.id,
-            email=user.email,
-            role=user.role
-        )
-
-        return TokenResponse(
-            access_token=token,
-            token_type="bearer",
-            user=user
-        )
-    except Exception as e:
-        logger.error(f"Registration failed: {e}")
-        raise
-
-
-@app.post("/api/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin, request: Request):
-    """Authenticate user and return access token"""
-    if not app_state.auth_manager:
-        raise HTTPException(status_code=503, detail="Authentication not available")
-
-    # Get client IP
-    client_ip = request.client.host if request.client else None
-
-    # Authenticate user
-    user_dict = app_state.auth_manager.authenticate_user(
-        email=credentials.email,
-        password=credentials.password
-    )
-
-    if not user_dict:
-        # Log failed login attempt
-        if app_state.audit_logger:
-            app_state.audit_logger.log_auth_event(
-                action=app_state.audit_logger.ACTION_LOGIN_FAILED,
-                user_email=credentials.email,
-                ip_address=client_ip,
-                status="failure",
-                error_message="Incorrect email or password"
-            )
-
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect email or password"
-        )
-
-    # Log successful login
-    if app_state.audit_logger:
-        app_state.audit_logger.log_auth_event(
-            action=app_state.audit_logger.ACTION_LOGIN,
-            user_id=user_dict['id'],
-            user_email=user_dict['email'],
-            ip_address=client_ip,
-            status="success"
-        )
-
-    # Generate token
-    token = app_state.auth_manager.create_access_token(
-        user_id=user_dict['id'],
-        email=user_dict['email'],
-        role=user_dict['role']
-    )
-
-    # Create user response
-    user = UserResponse(
-        id=user_dict['id'],
-        email=user_dict['email'],
-        full_name=user_dict['full_name'],
-        role=user_dict['role'],
-        created_at=user_dict['created_at'],
-        last_login=user_dict['last_login']
-    )
-
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        user=user
-    )
-
-
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_current_user_info(current_user: UserResponse = Depends(get_current_user)):
-    """Get current authenticated user info"""
-    return current_user
-
-
-@app.get("/api/auth/users", response_model=List[UserResponse])
-async def list_users(current_user: UserResponse = Depends(require_admin)):
-    """List all users (admin only)"""
-    if not app_state.auth_manager:
-        raise HTTPException(status_code=503, detail="Authentication not available")
-
-    return app_state.auth_manager.get_all_users()
+# @app.post("/api/auth/register", response_model=TokenResponse)
+# async def register(user_data: UserCreate):
+#     """Register a new user account"""
+#     if not app_state.auth_manager:
+#         raise HTTPException(status_code=503, detail="Authentication not available")
+#
+#     try:
+#         # Create user
+#         user = app_state.auth_manager.create_user(user_data)
+#
+#         # Generate token
+#         token = app_state.auth_manager.create_access_token(
+#             user_id=user.id,
+#             email=user.email,
+#             role=user.role
+#         )
+#
+#         return TokenResponse(
+#             access_token=token,
+#             token_type="bearer",
+#             user=user
+#         )
+#     except Exception as e:
+#         logger.error(f"Registration failed: {e}")
+#         raise
+#
+#
+# @app.post("/api/auth/login", response_model=TokenResponse)
+# async def login(credentials: UserLogin, request: Request):
+#     """Authenticate user and return access token"""
+#     if not app_state.auth_manager:
+#         raise HTTPException(status_code=503, detail="Authentication not available")
+#
+#     # Get client IP
+#     client_ip = request.client.host if request.client else None
+#
+#     # Authenticate user
+#     user_dict = app_state.auth_manager.authenticate_user(
+#         email=credentials.email,
+#         password=credentials.password
+#     )
+#
+#     if not user_dict:
+#         # Log failed login attempt
+#         if app_state.audit_logger:
+#             app_state.audit_logger.log_auth_event(
+#                 action=app_state.audit_logger.ACTION_LOGIN_FAILED,
+#                 user_email=credentials.email,
+#                 ip_address=client_ip,
+#                 status="failure",
+#                 error_message="Incorrect email or password"
+#             )
+#
+#         raise HTTPException(
+#             status_code=401,
+#             detail="Incorrect email or password"
+#         )
+#
+#     # Log successful login
+#     if app_state.audit_logger:
+#         app_state.audit_logger.log_auth_event(
+#             action=app_state.audit_logger.ACTION_LOGIN,
+#             user_id=user_dict['id'],
+#             user_email=user_dict['email'],
+#             ip_address=client_ip,
+#             status="success"
+#         )
+#
+#     # Generate token
+#     token = app_state.auth_manager.create_access_token(
+#         user_id=user_dict['id'],
+#         email=user_dict['email'],
+#         role=user_dict['role']
+#     )
+#
+#     # Create user response
+#     user = UserResponse(
+#         id=user_dict['id'],
+#         email=user_dict['email'],
+#         full_name=user_dict['full_name'],
+#         role=user_dict['role'],
+#         created_at=user_dict['created_at'],
+#         last_login=user_dict['last_login']
+#     )
+#
+#     return TokenResponse(
+#         access_token=token,
+#         token_type="bearer",
+#         user=user
+#     )
+#
+#
+# @app.get("/api/auth/me", response_model=UserResponse)
+# async def get_current_user_info(current_user: UserResponse = Depends(get_current_user)):
+#     """Get current authenticated user info"""
+#     return current_user
+#
+#
+# @app.get("/api/auth/users", response_model=List[UserResponse])
+# async def list_users():
+#     """List all users"""
+#     if not app_state.auth_manager:
+#         raise HTTPException(status_code=503, detail="Authentication not available")
+#
+#     return app_state.auth_manager.get_all_users()
 
 
 # =============================================================================
@@ -755,12 +938,11 @@ async def list_users(current_user: UserResponse = Depends(require_admin)):
 
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_document(
-    file: UploadFile = File(...),
-    current_user: UserResponse = Depends(require_editor)
+    file: UploadFile = File(...)
 ):
-    """Enhanced document upload with Phase 1 analytics logging (requires editor role)"""
+    """Enhanced document upload with Phase 1 analytics logging"""
     start_time = time.time()
-    logger.info(f"📤 Upload request received: {file.filename} by {current_user.email}")
+    logger.info(f"📤 Upload request received: {file.filename}")
     
     try:
         # Validation
@@ -1380,29 +1562,25 @@ Provide a clear, accurate answer based on the context. If the context doesn't co
                     else:
                         prompt = f"You are a helpful AI assistant. Answer this question: {message}"
                     
-                    # Step 4: Stream the response - FIXED ASYNC VERSION
+                    # Step 4: Stream the response - ASYNC OPENAI VERSION
                     full_response = ""
-                    
+
                     try:
-                        # Create the streaming request in a thread executor
-                        def create_stream():
-                            return app_state.rag_system.llm_manager.client.chat.completions.create(
-                                model=app_state.rag_system.config.openai_model,
-                                messages=[{"role": "user", "content": prompt}],
-                                max_tokens=app_state.rag_system.config.max_tokens,
-                                temperature=app_state.rag_system.config.temperature,
-                                stream=True
-                            )
-                        
-                        # Get the stream object
-                        stream = await asyncio.get_event_loop().run_in_executor(None, create_stream)
-                        
-                        # Stream tokens to client
-                        for chunk in stream:
+                        # Create the streaming request - AsyncOpenAI returns a coroutine
+                        stream = await app_state.rag_system.llm_manager.client.chat.completions.create(
+                            model=app_state.rag_system.config.openai_model,
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=app_state.rag_system.config.max_tokens,
+                            temperature=app_state.rag_system.config.temperature,
+                            stream=True
+                        )
+
+                        # Stream tokens to client - using async for since AsyncOpenAI stream is async
+                        async for chunk in stream:
                             if chunk.choices[0].delta.content:
                                 token = chunk.choices[0].delta.content
                                 full_response += token
-                                
+
                                 # Send token immediately
                                 await websocket.send_json({
                                     "type": "stream_token",
@@ -1410,7 +1588,7 @@ Provide a clear, accurate answer based on the context. If the context doesn't co
                                     "conversation_id": conversation_id,
                                     "timestamp": time.time()
                                 })
-                                
+
                                 # Small delay for smooth visual effect
                                 await asyncio.sleep(0.01)
                     
@@ -1531,10 +1709,9 @@ async def transcribe_audio(request: Request):
 @app.get("/api/conversations", response_model=ConversationHistoryResponse)
 async def get_conversations(
     limit: int = 50,
-    offset: int = 0,
-    current_user: UserResponse = Depends(require_viewer)
+    offset: int = 0
 ):
-    """Get conversation history from analytics database (requires authentication)"""
+    """Get conversation history from analytics database"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
 
@@ -1590,8 +1767,8 @@ async def search_conversations(
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
-async def get_analytics_summary(current_user: UserResponse = Depends(require_viewer)):
-    """Get analytics summary (requires authentication)"""
+async def get_analytics_summary():
+    """Get analytics summary"""
     if not app_state.analytics_db:
         raise HTTPException(status_code=503, detail="Analytics not available")
     
@@ -1618,11 +1795,10 @@ async def get_analytics_summary(current_user: UserResponse = Depends(require_vie
 @app.get("/api/analytics/budget-alert")
 async def get_budget_alert(
     daily_budget: float = 10.0,
-    monthly_budget: float = 300.0,
-    current_user: UserResponse = Depends(require_viewer)
+    monthly_budget: float = 300.0
 ):
     """
-    Get budget alert status (requires authentication)
+    Get budget alert status
     Checks current spending against daily and monthly budgets
     """
     if not app_state.analytics_db:
@@ -1636,9 +1812,9 @@ async def get_budget_alert(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics/cost-breakdown")
-async def get_cost_breakdown(days: int = 30, current_user: UserResponse = Depends(require_viewer)):
+async def get_cost_breakdown(days: int = 30):
     """
-    Get detailed cost breakdown by model and time period (requires authentication)
+    Get detailed cost breakdown by model and time period
     Provides granular cost analysis for the specified number of days
     """
     if not app_state.analytics_db:
@@ -1764,6 +1940,376 @@ async def export_analytics(format: str = "json"):
     except Exception as e:
         logger.error(f"Failed to export analytics: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export data: {str(e)}")
+
+# =============================================================================
+# 🏢 MULTI-TENANT API ENDPOINTS
+# =============================================================================
+
+@app.post("/api/tenants", response_model=TenantCreateResponse, tags=["Multi-Tenant"])
+async def create_tenant(request: TenantCreate):
+    """
+    Create a new tenant (client company).
+
+    Returns tenant info AND the API key.
+    ⚠️ IMPORTANT: The API key is only shown ONCE - save it securely!
+
+    The API key is used for widget authentication.
+    """
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    # Validate tier
+    try:
+        tier = TenantTier(request.tier) if request.tier else TenantTier.STARTER
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tier: {request.tier}. Use: starter, professional, enterprise"
+        )
+
+    try:
+        tenant, api_key = await app_state.tenant_manager.create_tenant(
+            name=request.name,
+            domain=request.domain.lower() if request.domain else None,
+            tier=tier
+        )
+
+        logger.info(f"✅ Created tenant: {tenant.name} (ID: {tenant.id})")
+
+        return TenantCreateResponse(
+            tenant=TenantResponse(
+                id=tenant.id,
+                name=tenant.name,
+                slug=tenant.slug,
+                domain=tenant.domain,
+                status=tenant.status.value,
+                tier=tenant.tier.value,
+                created_at=tenant.created_at,
+                qdrant_collection=tenant.qdrant_collection_name,
+                limits={
+                    "max_users": tenant.max_users,
+                    "max_documents": tenant.max_documents,
+                    "max_storage_mb": tenant.max_storage_mb,
+                    "max_queries_per_day": tenant.max_queries_per_day,
+                }
+            ),
+            api_key=api_key,
+            message="🎉 Tenant created! Save the API key now - it won't be shown again!"
+        )
+    except Exception as e:
+        logger.error(f"Failed to create tenant: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tenants/{tenant_id}", tags=["Multi-Tenant"])
+async def get_tenant(tenant_id: str):
+    """Get tenant information by ID."""
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    tenant = await app_state.tenant_manager.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return tenant.to_dict()
+
+
+@app.get("/api/tenants", tags=["Multi-Tenant"])
+async def list_tenants(
+    status: Optional[str] = None,
+    tier: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    List all tenants with optional filtering.
+
+    In production, this should be restricted to super admins only.
+    """
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    try:
+        status_enum = TenantStatus(status) if status else None
+        tier_enum = TenantTier(tier) if tier else None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    tenants = await app_state.tenant_manager.list_tenants(
+        status=status_enum,
+        tier=tier_enum,
+        limit=limit,
+        offset=offset
+    )
+
+    return {
+        "tenants": [t.to_dict() for t in tenants],
+        "count": len(tenants),
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@app.get("/api/tenants/{tenant_id}/usage", tags=["Multi-Tenant"])
+async def get_tenant_usage(tenant_id: str):
+    """Get current resource usage for a tenant."""
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    tenant = await app_state.tenant_manager.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    usage = await app_state.tenant_manager.get_usage(tenant_id)
+    if not usage:
+        raise HTTPException(status_code=404, detail="Usage data not found")
+
+    return {
+        "tenant_id": tenant_id,
+        "user_count": usage.user_count,
+        "document_count": usage.document_count,
+        "storage_mb": round(usage.storage_mb, 2),
+        "queries_today": usage.queries_today,
+        "queries_this_month": usage.queries_this_month,
+        "limits": {
+            "max_users": tenant.max_users,
+            "max_documents": tenant.max_documents,
+            "max_storage_mb": tenant.max_storage_mb,
+            "max_queries_per_day": tenant.max_queries_per_day,
+        }
+    }
+
+
+@app.post("/api/tenants/{tenant_id}/rotate-key", tags=["Multi-Tenant"])
+async def rotate_tenant_api_key(tenant_id: str):
+    """
+    Rotate the API key for a tenant.
+
+    ⚠️ The new key is only shown ONCE!
+    The old key stops working immediately.
+    """
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    new_key = await app_state.tenant_manager.rotate_api_key(tenant_id)
+    if not new_key:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {
+        "message": "✅ API key rotated successfully",
+        "api_key": new_key,
+        "warning": "⚠️ Save this key now - it won't be shown again!"
+    }
+
+
+@app.post("/api/auth/validate-key", tags=["Multi-Tenant"])
+async def validate_api_key(api_key: str = Header(..., alias="X-API-Key")):
+    """
+    Validate an API key and return tenant info.
+
+    Used by the embeddable widget to authenticate.
+    Send the API key in the X-API-Key header.
+    """
+    if not app_state.tenant_manager:
+        raise HTTPException(status_code=503, detail="Multi-tenant system not available")
+
+    tenant = await app_state.tenant_manager.validate_api_key(api_key)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="Invalid or expired API key")
+
+    if not tenant.is_active:
+        raise HTTPException(status_code=403, detail="Tenant account is suspended")
+
+    return {
+        "valid": True,
+        "tenant_id": tenant.id,
+        "tenant_name": tenant.name,
+        "tier": tenant.tier.value,
+        "qdrant_collection": tenant.qdrant_collection_name
+    }
+
+
+# =============================================================================
+# 📄 SCOPED DOCUMENT ENDPOINTS
+# =============================================================================
+
+@app.post("/api/documents/upload-scoped", tags=["Documents"])
+async def upload_scoped_document(
+    file: UploadFile = File(...),
+    scope: str = "personal",
+    tags: str = "",
+    description: str = "",
+    tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    user_id: str = Header(None, alias="X-User-ID")
+):
+    """
+    Upload a document with scope (company or personal).
+
+    Required Headers:
+    - X-Tenant-ID: The tenant uploading the document
+    - X-User-ID: The user uploading (required for personal scope)
+
+    Scope Rules:
+    - 'company': Visible to ALL users in the tenant (admin upload only)
+    - 'personal': Visible only to the uploading user
+    """
+    if not app_state.scope_manager:
+        raise HTTPException(status_code=503, detail="Document scopes not available")
+
+    # Validate scope
+    try:
+        doc_scope = DocumentScope(scope)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Scope must be 'company' or 'personal'"
+        )
+
+    # Personal docs require user_id
+    if doc_scope == DocumentScope.PERSONAL and not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="X-User-ID header required for personal documents"
+        )
+
+    # Parse tags
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    try:
+        # Read file
+        content = await file.read()
+        file_size = len(content)
+
+        # Register document in scope system
+        scoped_doc = await app_state.scope_manager.register_document(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            filename=file.filename,
+            scope=doc_scope,
+            file_size=file_size,
+            file_type=file.content_type or "",
+            tags=tag_list,
+            description=description
+        )
+
+        logger.info(f"📄 Registered scoped document: {file.filename} (scope={scope})")
+
+        # TODO: Process with your existing RAG system
+        # When storing in Qdrant, include these metadata fields:
+        # {
+        #     "doc_id": scoped_doc.id,
+        #     "tenant_id": scoped_doc.tenant_id,
+        #     "user_id": scoped_doc.user_id,
+        #     "scope": scoped_doc.scope.value,
+        #     "filename": scoped_doc.filename
+        # }
+
+        return {
+            "message": "✅ Document uploaded successfully",
+            "document": scoped_doc.to_dict(),
+            "next_step": "Document will be processed and indexed"
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/scoped", tags=["Documents"])
+async def list_scoped_documents(
+    scope: Optional[str] = None,
+    status: Optional[str] = None,
+    tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    user_id: str = Header(None, alias="X-User-ID"),
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    List documents accessible to the current user.
+
+    Access Control:
+    - Company documents are visible to ALL users in the tenant
+    - Personal documents are visible ONLY to their owner
+
+    Required Headers:
+    - X-Tenant-ID: Tenant context
+    - X-User-ID: User making request (for access control)
+    """
+    if not app_state.scope_manager:
+        raise HTTPException(status_code=503, detail="Document scopes not available")
+
+    # Parse filters
+    scope_enum = None
+    if scope:
+        try:
+            scope_enum = DocumentScope(scope)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid scope")
+
+    status_enum = None
+    if status:
+        try:
+            status_enum = DocScopeStatus(status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid status")
+
+    docs = await app_state.scope_manager.get_accessible_documents(
+        tenant_id=tenant_id,
+        user_id=user_id or "",
+        is_admin=False,  # TODO: Check from auth system
+        scope=scope_enum,
+        status=status_enum,
+        limit=limit,
+        offset=offset
+    )
+
+    return {
+        "documents": [d.to_dict() for d in docs],
+        "count": len(docs),
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@app.delete("/api/documents/scoped/{doc_id}", tags=["Documents"])
+async def delete_scoped_document(
+    doc_id: str,
+    hard_delete: bool = False,
+    tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    user_id: str = Header(..., alias="X-User-ID")
+):
+    """
+    Delete a scoped document.
+
+    Access Control:
+    - Users can only delete their own personal documents
+    - Admins can delete any document in their tenant
+    """
+    if not app_state.scope_manager:
+        raise HTTPException(status_code=503, detail="Document scopes not available")
+
+    # Get document to check access
+    doc = await app_state.scope_manager.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Check tenant match
+    if doc.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check access (for now, only owner can delete personal docs)
+    if doc.is_personal_doc and doc.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Cannot delete another user's document")
+
+    success = await app_state.scope_manager.delete_document(doc_id, hard_delete)
+
+    if success:
+        # TODO: Also delete from Qdrant and file system
+        return {"message": "✅ Document deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to delete document")
 
 # =============================================================================
 # ✨ PHASE 5: CONFIGURATION API ENDPOINTS

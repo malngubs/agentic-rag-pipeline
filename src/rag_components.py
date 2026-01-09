@@ -489,12 +489,12 @@ class VectorStoreManager:
             
             results = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.client.search(
+                lambda: self.client.query_points(
                     collection_name=self.config.vector_collection_name,
-                    query_vector=query_embedding,
+                    query=query_embedding,
                     limit=limit,
                     score_threshold=score_threshold
-                )
+                ).points
             )
             
             return [{
@@ -751,19 +751,22 @@ class RAGSystem:
         """Initialize all components"""
         try:
             self.logger.info("🚀 Initializing RAG System (OpenAI-powered)...")
-            
+
             # Initialize vector store
             await self.vector_store.initialize()
-            
+
             # Verify OpenAI client is ready
             if not self.llm_manager.client:
                 raise Exception("OpenAI client not initialized")
-            
+
+            # Recalculate document statistics from existing metadata
+            await self._recalculate_stats()
+
             self.initialized = True
-            
+
             self.logger.info("🎉 RAG System initialized successfully!")
             return {"initialized": True, "status": "ready", "llm": "OpenAI GPT-4o-mini"}
-            
+
         except Exception as e:
             self.logger.error(f"❌ Initialization failed: {str(e)}")
             self.initialized = False
@@ -1051,6 +1054,18 @@ Are there any exceptions to this policy?"""
             self.logger.error(f"Failed to delete document {doc_id}: {str(e)}")
             return {"success": False, "error": str(e)}
     
+    async def _recalculate_stats(self):
+        """Recalculate document and chunk statistics from metadata"""
+        try:
+            documents = self.metadata_manager.get_all_documents()
+            self.documents_indexed = sum(1 for doc in documents if doc.status == "indexed")
+            self.total_chunks = sum(doc.chunk_count for doc in documents if doc.status == "indexed")
+            self.logger.info(f"📊 Stats recalculated: {self.documents_indexed} documents, {self.total_chunks} chunks")
+        except Exception as e:
+            self.logger.warning(f"Failed to recalculate stats: {e}")
+            self.documents_indexed = 0
+            self.total_chunks = 0
+
     async def get_system_status(self) -> Dict[str, Any]:
         """Get comprehensive system status"""
         try:

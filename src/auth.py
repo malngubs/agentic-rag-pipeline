@@ -22,6 +22,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
 
 
 # Pydantic Models
@@ -294,7 +295,7 @@ async def get_current_user(
 
 # Optional authentication (for endpoints that work with or without auth)
 async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)
 ) -> Optional[UserResponse]:
     """Optional authentication - returns None if not authenticated"""
     if not credentials:

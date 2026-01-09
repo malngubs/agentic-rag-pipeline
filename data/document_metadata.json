@@ -18,5 +18,15 @@
     "chunk_count": 300,
     "status": "indexed",
     "error_message": null
+  },
+  "cf9c519e-16ef-43cd-b447-d16ecdcb9b38": {
+    "doc_id": "cf9c519e-16ef-43cd-b447-d16ecdcb9b38",
+    "filename": "Headcount report - November 2025.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 75962,
+    "upload_date": "2025-11-28T10:12:34.774509",
+    "chunk_count": 1,
+    "status": "indexed",
+    "error_message": null
   }
 }
