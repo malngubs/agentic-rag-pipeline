@@ -31,15 +31,37 @@ from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
 # Import data analyst module with fallback
 try:
-    from data_analyst.file_ingestor import FileIngestor
+    from data_analyst import (
+        AnalystOrchestrator,
+        FileIngestor,
+        DataProfiler,
+        StatisticalEngine,
+        ChartRecommender,
+        ChartGenerator,
+        InsightGenerator,
+    )
     DATA_ANALYST_AVAILABLE = True
 except ImportError:
     try:
-        from .data_analyst.file_ingestor import FileIngestor
+        from .data_analyst import (
+            AnalystOrchestrator,
+            FileIngestor,
+            DataProfiler,
+            StatisticalEngine,
+            ChartRecommender,
+            ChartGenerator,
+            InsightGenerator,
+        )
         DATA_ANALYST_AVAILABLE = True
     except ImportError:
         DATA_ANALYST_AVAILABLE = False
+        AnalystOrchestrator = None
         FileIngestor = None
+        DataProfiler = None
+        StatisticalEngine = None
+        ChartRecommender = None
+        ChartGenerator = None
+        InsightGenerator = None
         logging.warning("⚠️ data_analyst module not available")
 
 # Import our RAG system
@@ -2679,6 +2701,567 @@ async def download_document(document_id: str, version: Optional[int] = None):
     except Exception as e:
         logger.error(f"Failed to serve document for download: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# 📊 SESSION-BASED DATA ANALYSIS API (Tier 1 BI Features)
+# =============================================================================
+
+# Global session storage for data analysis
+_analysis_sessions: Dict[str, Any] = {}
+_session_orchestrators: Dict[str, Any] = {}
+
+class SessionCreateRequest(BaseModel):
+    user_id: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    id: str
+    created_at: str
+    data_loaded: bool
+    file_name: Optional[str] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+
+class ForecastRequest(BaseModel):
+    column: str
+    periods: int = 30
+    method: str = "auto"
+
+class StatisticsRequest(BaseModel):
+    test_type: str
+    columns: List[str]
+    options: Optional[Dict[str, Any]] = None
+
+class ChartRequest(BaseModel):
+    chart_type: str
+    columns: List[str]
+    options: Optional[Dict[str, Any]] = None
+
+class ChartRecommendRequest(BaseModel):
+    columns: Optional[List[str]] = None
+
+class QueryRequest(BaseModel):
+    query: str
+
+class ExportRequest(BaseModel):
+    format: str = "csv"
+
+
+@app.post("/api/sessions", response_model=SessionResponse, tags=["Data Analysis"])
+async def create_analysis_session(request: SessionCreateRequest = None):
+    """Create a new data analysis session"""
+    if not DATA_ANALYST_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Data analyst module not available")
+
+    try:
+        session_id = str(uuid.uuid4())
+        orchestrator = AnalystOrchestrator()
+        session = orchestrator.create_session()
+
+        _analysis_sessions[session_id] = {
+            "id": session_id,
+            "orchestrator_session_id": session.id,
+            "created_at": datetime.now().isoformat(),
+            "data_loaded": False,
+            "file_name": None,
+            "row_count": None,
+            "column_count": None,
+            "data": None,
+            "profile": None,
+        }
+        _session_orchestrators[session_id] = orchestrator
+
+        logger.info(f"📊 Created analysis session: {session_id}")
+
+        return SessionResponse(
+            id=session_id,
+            created_at=_analysis_sessions[session_id]["created_at"],
+            data_loaded=False
+        )
+    except Exception as e:
+        logger.error(f"Failed to create session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}", response_model=SessionResponse, tags=["Data Analysis"])
+async def get_analysis_session(session_id: str):
+    """Get session information"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    return SessionResponse(
+        id=session["id"],
+        created_at=session["created_at"],
+        data_loaded=session["data_loaded"],
+        file_name=session.get("file_name"),
+        row_count=session.get("row_count"),
+        column_count=session.get("column_count"),
+    )
+
+
+@app.post("/api/sessions/{session_id}/upload", tags=["Data Analysis"])
+async def upload_session_file(session_id: str, file: UploadFile = File(...)):
+    """Upload a file to the analysis session"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not DATA_ANALYST_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Data analyst module not available")
+
+    try:
+        import pandas as pd
+        import io
+
+        # Read file content
+        content = await file.read()
+        file_ext = file.filename.lower().split('.')[-1] if file.filename else 'csv'
+
+        # Parse based on file type
+        if file_ext == 'csv':
+            df = pd.read_csv(io.BytesIO(content))
+        elif file_ext in ['xlsx', 'xls']:
+            df = pd.read_excel(io.BytesIO(content))
+        elif file_ext == 'json':
+            df = pd.read_json(io.BytesIO(content))
+        else:
+            # Try CSV as default
+            df = pd.read_csv(io.BytesIO(content))
+
+        # Update session
+        _analysis_sessions[session_id]["data"] = df
+        _analysis_sessions[session_id]["data_loaded"] = True
+        _analysis_sessions[session_id]["file_name"] = file.filename
+        _analysis_sessions[session_id]["row_count"] = len(df)
+        _analysis_sessions[session_id]["column_count"] = len(df.columns)
+
+        logger.info(f"📊 Uploaded file to session {session_id}: {file.filename} ({len(df)} rows)")
+
+        return {
+            "success": True,
+            "file_name": file.filename,
+            "rows": len(df),
+            "columns": len(df.columns),
+            "column_names": df.columns.tolist()
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}/profile", tags=["Data Analysis"])
+async def get_session_profile(session_id: str):
+    """Get data profile for the session"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        profiler = DataProfiler()
+        profile = profiler.profile(df)
+
+        logger.info(f"DEBUG: Profile created with {len(profile.columns)} columns")
+
+        # Convert to dict for JSON response
+        columns = []
+        for col in profile.columns:
+            logger.info(f"DEBUG: Processing column {col.name}, stats type: {type(col.statistics) if col.statistics else None}")
+            # Get missing info from quality
+            missing_count = col.quality.missing_count if hasattr(col, 'quality') else 0
+            missing_pct = col.quality.missing_percent if hasattr(col, 'quality') else 0.0
+
+            col_dict = {
+                "name": col.name,
+                "type": str(col.dtype.value) if hasattr(col.dtype, 'value') else str(col.dtype),
+                "semantic_type": col.dtype.value if hasattr(col.dtype, 'value') else "unknown",
+                "missing_count": int(missing_count),
+                "missing_percentage": float(missing_pct),
+                "unique_count": int(col.unique_count) if hasattr(col, 'unique_count') else 0,
+                "sample_values": [str(v) for v in col.sample_values[:5]] if hasattr(col, 'sample_values') else [],
+            }
+
+            # Add statistics for numeric columns (ColumnStatistics is a dataclass, not dict)
+            if hasattr(col, 'statistics') and col.statistics:
+                stats = col.statistics
+                col_dict["statistics"] = {
+                    "min": float(stats.min) if stats.min is not None else None,
+                    "max": float(stats.max) if stats.max is not None else None,
+                    "mean": float(stats.mean) if stats.mean is not None else None,
+                    "median": float(stats.median) if stats.median is not None else None,
+                    "std": float(stats.std) if stats.std is not None else None,
+                }
+            columns.append(col_dict)
+
+        # Get quality info
+        quality_score = 0.8
+        quality_level = "good"
+        if hasattr(profile, 'quality') and profile.quality:
+            quality_score = profile.quality.quality_score / 100.0 if profile.quality.quality_score else 0.8
+            quality_level = profile.quality.quality_level.value if hasattr(profile.quality.quality_level, 'value') else "good"
+
+        return {
+            "columns": columns,
+            "row_count": profile.row_count,
+            "column_count": profile.column_count,
+            "quality_score": quality_score,
+            "quality_level": quality_level,
+            "summary": profile.summary_text if hasattr(profile, 'summary_text') else f"Dataset with {profile.row_count} rows and {profile.column_count} columns"
+        }
+    except Exception as e:
+        logger.error(f"Failed to profile data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}/preview", tags=["Data Analysis"])
+async def get_session_preview(session_id: str, limit: int = 100):
+    """Get data preview (first N rows)"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        preview_df = df.head(limit)
+
+        return {
+            "columns": df.columns.tolist(),
+            "data": preview_df.values.tolist(),
+            "total_rows": len(df)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get preview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/forecast", tags=["Data Analysis"])
+async def run_forecast(session_id: str, request: ForecastRequest):
+    """Run forecast on a column"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+
+        if request.column not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{request.column}' not found")
+
+        engine = StatisticalEngine()
+        # Get the column data as a pandas Series for forecasting
+        column_data = df[request.column].dropna()
+        result = engine.forecast(
+            column_data,
+            periods=request.periods,
+            method=request.method if request.method != "auto" else None
+        )
+
+        # Helper to convert array-like to list
+        def to_list(val):
+            if val is None:
+                return []
+            if hasattr(val, 'tolist'):
+                return val.tolist()
+            if isinstance(val, list):
+                return val
+            return list(val) if hasattr(val, '__iter__') else []
+
+        return {
+            "method": result.method if hasattr(result, 'method') else request.method,
+            "forecast_values": to_list(result.forecast if hasattr(result, 'forecast') else None),
+            "forecast_dates": [],  # Would need date column for this
+            "confidence_lower": to_list(result.lower_bound if hasattr(result, 'lower_bound') else None),
+            "confidence_upper": to_list(result.upper_bound if hasattr(result, 'upper_bound') else None),
+            "confidence_level": 0.95,
+            "metrics": {
+                "mae": float(result.mae) if hasattr(result, 'mae') and result.mae is not None else 0,
+                "rmse": float(result.rmse) if hasattr(result, 'rmse') and result.rmse is not None else 0,
+                "mape": float(result.mape) if hasattr(result, 'mape') and result.mape is not None else 0,
+            },
+            "trend_direction": result.trend if hasattr(result, 'trend') else "stable",
+            "seasonality_detected": result.seasonality if hasattr(result, 'seasonality') else False,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run forecast: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/statistics", tags=["Data Analysis"])
+async def run_statistics(session_id: str, request: StatisticsRequest):
+    """Run statistical analysis"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        engine = StatisticalEngine()
+
+        # Validate columns exist
+        for col in request.columns:
+            if col not in df.columns:
+                raise HTTPException(status_code=400, detail=f"Column '{col}' not found")
+
+        # Run appropriate statistical test
+        test_type = request.test_type.lower()
+
+        if test_type == "t_test" or test_type == "ttest":
+            if len(request.columns) < 2:
+                raise HTTPException(status_code=400, detail="T-test requires 2 columns")
+            result = engine.t_test(df[request.columns[0]], df[request.columns[1]])
+        elif test_type == "correlation":
+            result = engine.correlation(df[request.columns])
+        elif test_type == "chi_square" or test_type == "chi2":
+            if len(request.columns) < 2:
+                raise HTTPException(status_code=400, detail="Chi-square test requires 2 columns")
+            result = engine.chi_square_test(df[request.columns[0]], df[request.columns[1]])
+        elif test_type == "anova":
+            result = engine.anova(df, request.columns[0], request.columns[1] if len(request.columns) > 1 else None)
+        elif test_type == "regression":
+            if len(request.columns) < 2:
+                raise HTTPException(status_code=400, detail="Regression requires at least 2 columns")
+            result = engine.linear_regression(df[request.columns[:-1]], df[request.columns[-1]])
+        else:
+            # Default to descriptive statistics
+            result = engine.describe(df[request.columns])
+
+        # Format response
+        return {
+            "test_type": request.test_type,
+            "test_statistic": float(result.statistic) if hasattr(result, 'statistic') else 0,
+            "p_value": float(result.p_value) if hasattr(result, 'p_value') else 0,
+            "significant": bool(result.significant) if hasattr(result, 'significant') else False,
+            "interpretation": result.interpretation if hasattr(result, 'interpretation') else "Analysis complete",
+            "effect_size": float(result.effect_size) if hasattr(result, 'effect_size') else None,
+            "confidence_interval": list(result.confidence_interval) if hasattr(result, 'confidence_interval') else None,
+            "additional_info": result.details if hasattr(result, 'details') else {},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}/insights", tags=["Data Analysis"])
+async def get_insights(session_id: str):
+    """Get AI-generated insights"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        generator = InsightGenerator()
+        result = generator.generate_insights(df)
+
+        # Extract insights list from InsightCollection
+        if hasattr(result, 'insights'):
+            insights_list = result.insights
+        elif isinstance(result, list):
+            insights_list = result
+        else:
+            insights_list = [result]
+
+        formatted_insights = []
+        for insight in insights_list:
+            # Get enum values safely
+            insight_type = insight.insight_type.value if hasattr(insight.insight_type, 'value') else str(insight.insight_type) if hasattr(insight, 'insight_type') else "general"
+            priority = insight.priority.value if hasattr(insight.priority, 'value') else str(insight.priority) if hasattr(insight, 'priority') else "medium"
+            category = insight.category.value if hasattr(insight.category, 'value') else str(insight.category) if hasattr(insight, 'category') else "general"
+
+            formatted_insights.append({
+                "id": insight.id if hasattr(insight, 'id') else None,
+                "type": insight_type,
+                "priority": priority,
+                "category": category,
+                "text": insight.text if hasattr(insight, 'text') else str(insight),
+                "metric_name": insight.metric_name if hasattr(insight, 'metric_name') else None,
+                "metric_value": float(insight.metric_value) if hasattr(insight, 'metric_value') and insight.metric_value is not None else None,
+                "change_value": float(insight.change_value) if hasattr(insight, 'change_value') and insight.change_value is not None else None,
+                "change_percent": float(insight.change_percent) if hasattr(insight, 'change_percent') and insight.change_percent is not None else None,
+                "confidence": float(insight.confidence) if hasattr(insight, 'confidence') else 0.8,
+                "source": insight.source if hasattr(insight, 'source') else "rule-based",
+            })
+
+        return {
+            "insights": formatted_insights,
+            "total_count": result.total_count if hasattr(result, 'total_count') else len(formatted_insights),
+            "critical_count": result.critical_count if hasattr(result, 'critical_count') else 0,
+            "high_count": result.high_count if hasattr(result, 'high_count') else 0,
+        }
+    except Exception as e:
+        logger.error(f"Failed to generate insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/recommend-charts", tags=["Data Analysis"])
+async def recommend_charts(session_id: str, request: ChartRecommendRequest = None):
+    """Get chart recommendations"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        recommender = ChartRecommender()
+
+        columns = request.columns if request and request.columns else None
+        if columns:
+            for col in columns:
+                if col not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Column '{col}' not found")
+            recommendations = recommender.recommend(df[columns])
+        else:
+            recommendations = recommender.recommend(df)
+
+        return [
+            {
+                "chart_type": rec.chart_type if hasattr(rec, 'chart_type') else str(rec),
+                "score": float(rec.score) if hasattr(rec, 'score') else 0.8,
+                "explanation": rec.explanation if hasattr(rec, 'explanation') else "Recommended chart type"
+            }
+            for rec in (recommendations if isinstance(recommendations, list) else [recommendations])
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to recommend charts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/chart", tags=["Data Analysis"])
+async def generate_chart(session_id: str, request: ChartRequest):
+    """Generate a chart"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+
+        # Validate columns
+        for col in request.columns:
+            if col not in df.columns:
+                raise HTTPException(status_code=400, detail=f"Column '{col}' not found")
+
+        generator = ChartGenerator()
+        chart = generator.generate(
+            df,
+            chart_type=request.chart_type,
+            columns=request.columns,
+            **(request.options or {})
+        )
+
+        return {
+            "chart_data": chart.data if hasattr(chart, 'data') else chart,
+            "chart_config": chart.layout if hasattr(chart, 'layout') else {}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate chart: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/query", tags=["Data Analysis"])
+async def query_session(session_id: str, request: QueryRequest):
+    """Natural language query on session data"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        orchestrator = _session_orchestrators.get(session_id)
+        if not orchestrator:
+            raise HTTPException(status_code=500, detail="Session orchestrator not found")
+
+        result = orchestrator.query(session["orchestrator_session_id"], request.query)
+
+        return {
+            "response": result.response if hasattr(result, 'response') else str(result),
+            "chart": result.chart if hasattr(result, 'chart') else None,
+            "table": result.table if hasattr(result, 'table') else None,
+            "insights": result.insights if hasattr(result, 'insights') else [],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/export", tags=["Data Analysis"])
+async def export_session_data(session_id: str, request: ExportRequest):
+    """Export session data to various formats"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        import io
+        df = session["data"]
+
+        if request.format == "csv":
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            content = output.getvalue()
+            media_type = "text/csv"
+            filename = "export.csv"
+        elif request.format == "json":
+            content = df.to_json(orient="records")
+            media_type = "application/json"
+            filename = "export.json"
+        elif request.format == "excel":
+            output = io.BytesIO()
+            df.to_excel(output, index=False)
+            content = output.getvalue()
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            filename = "export.xlsx"
+            return Response(content=content, media_type=media_type, headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            })
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
+
+        return Response(content=content, media_type=media_type, headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =============================================================================
 # 🚀 DEVELOPMENT SERVER

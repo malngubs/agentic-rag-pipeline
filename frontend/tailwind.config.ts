@@ -27,22 +27,23 @@ const config: Config = {
     },
     extend: {
       // =========================================
-      // COLORS - Macrocomm Brand Palette
+      // COLORS - Dynamic Theme System
+      // Uses CSS variables so themes can be changed at runtime
       // =========================================
       colors: {
-        // Brand Colors
+        // Brand Colors - Using CSS variables for dynamic theming
         brand: {
-          50: '#FFF7ED',
-          100: '#FFEDD5',
-          200: '#FED7AA',
-          300: '#FDBA74',
-          400: '#FB923C',
-          500: '#FF923F', // Bright Orange
-          600: '#FF6E00', // Sunset Orange (Primary)
-          700: '#E65100',
-          800: '#C2410C',
-          900: '#9A3412',
-          950: '#7C2D12',
+          50: 'var(--color-brand-50)',
+          100: 'var(--color-brand-100)',
+          200: 'var(--color-brand-200)',
+          300: 'var(--color-brand-300)',
+          400: 'var(--color-brand-400)',
+          500: 'var(--color-brand-500)',
+          600: 'var(--color-brand-600)',  // Primary accent
+          700: 'var(--color-brand-700)',
+          800: 'var(--color-brand-800)',
+          900: 'var(--color-brand-900)',
+          950: 'var(--color-brand-950)',
         },
         
         // Background Colors (Premium Dark Theme)
@@ -98,9 +99,9 @@ const config: Config = {
           dark: '#2563EB',
         },
         
-        // Chart Colors (Vibrant palette for data viz)
+        // Chart Colors (First one uses brand, rest are fixed)
         chart: {
-          1: '#FF6E00', // Brand Orange
+          1: 'var(--color-brand-600)', // Dynamic brand color
           2: '#3B82F6', // Blue
           3: '#10B981', // Green
           4: '#F59E0B', // Amber
@@ -111,8 +112,8 @@ const config: Config = {
           9: '#84CC16', // Lime
           10: '#F97316', // Orange variant
         },
-        
-        // Shadcn/UI Compatible Colors
+
+        // Shadcn/UI Compatible Colors - Using CSS variables
         card: {
           DEFAULT: '#1A1F2E',
           foreground: '#F1F5F9',
@@ -122,7 +123,7 @@ const config: Config = {
           foreground: '#F1F5F9',
         },
         primary: {
-          DEFAULT: '#FF6E00',
+          DEFAULT: 'var(--color-brand-600)',
           foreground: '#FFFFFF',
         },
         secondary: {
@@ -134,24 +135,49 @@ const config: Config = {
           foreground: '#94A3B8',
         },
         accent: {
-          DEFAULT: '#FF923F',
+          DEFAULT: 'var(--color-brand-500)',
           foreground: '#FFFFFF',
         },
         destructive: {
           DEFAULT: '#EF4444',
           foreground: '#FFFFFF',
         },
-        ring: '#FF6E00',
+        ring: 'var(--color-brand-600)',
         input: '#334155',
       },
       
       // =========================================
-      // FONTS
+      // FONTS - Premium font stack (consistent across all platforms)
+      // Primary: Inter (clean, modern, similar to Segoe UI)
+      // Mono: JetBrains Mono (professional code font)
       // =========================================
       fontFamily: {
-        sans: ['var(--font-instrument)', 'system-ui', 'sans-serif'],
-        display: ['var(--font-cal)', 'system-ui', 'sans-serif'],
-        mono: ['var(--font-jetbrains)', 'monospace'],
+        sans: [
+          'var(--font-sans)',
+          'Inter',
+          'Segoe UI',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Roboto',
+          'Helvetica Neue',
+          'Arial',
+          'sans-serif',
+        ],
+        display: [
+          'var(--font-sans)',
+          'Inter',
+          'Segoe UI',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'sans-serif',
+        ],
+        mono: [
+          'JetBrains Mono',
+          'Consolas',
+          'Monaco',
+          'Fira Code',
+          'monospace',
+        ],
       },
       
       // =========================================

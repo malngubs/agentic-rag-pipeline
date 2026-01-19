@@ -2,13 +2,13 @@
  * ============================================================================
  * 📱 SIDEBAR - MACROCOMM BI PLATFORM
  * ============================================================================
- * 
+ *
  * Main navigation sidebar with collapsible design and smooth animations.
  */
 
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -24,8 +24,17 @@ import {
   Sparkles,
   Plus,
   Search,
+  Palette,
+  FlaskConical,
+  Database,
+  GitBranch,
+  Wand2,
+  Bell,
+  Users,
+  Zap,
 } from 'lucide-react';
 import { useUIStore, useSessionStore } from '@/lib/stores';
+import { ThemeSelector, useTheme } from '@/components/providers/ThemeProvider';
 
 // =============================================================================
 // NAVIGATION ITEMS
@@ -45,6 +54,48 @@ const mainNavItems: NavItem[] = [
     label: 'Chat',
     icon: MessageSquare,
     href: '/chat',
+  },
+  {
+    id: 'analysis',
+    label: 'Analysis',
+    icon: FlaskConical,
+    href: '/analysis',
+  },
+  {
+    id: 'nl-query',
+    label: 'NL Query',
+    icon: Wand2,
+    href: '/nl-query',
+  },
+  {
+    id: 'query-builder',
+    label: 'Query Builder',
+    icon: Database,
+    href: '/query-builder',
+  },
+  {
+    id: 'transform',
+    label: 'Transform',
+    icon: Zap,
+    href: '/transform',
+  },
+  {
+    id: 'scenarios',
+    label: 'Scenarios',
+    icon: GitBranch,
+    href: '/scenarios',
+  },
+  {
+    id: 'reports',
+    label: 'Reports & Alerts',
+    icon: Bell,
+    href: '/reports',
+  },
+  {
+    id: 'collaboration',
+    label: 'Collaboration',
+    icon: Users,
+    href: '/collaboration',
   },
   {
     id: 'dashboards',
@@ -83,22 +134,23 @@ interface NavLinkProps {
   item: NavItem;
   isCollapsed: boolean;
   isActive: boolean;
+  onClick?: () => void;
 }
 
-const NavLink: React.FC<NavLinkProps> = ({ item, isCollapsed, isActive }) => {
+const NavLink: React.FC<NavLinkProps> = ({ item, isCollapsed, isActive, onClick }) => {
   const Icon = item.icon;
-  
-  return (
-    <Link
-      href={item.href}
+
+  const content = (
+    <div
       className={`
         relative flex items-center gap-3 px-3 py-2.5 rounded-lg
-        transition-all duration-200 group
+        transition-all duration-200 group cursor-pointer
         ${isActive
           ? 'bg-brand-600/10 text-brand-500'
           : 'text-foreground-secondary hover:text-foreground hover:bg-surface-hover'
         }
       `}
+      onClick={onClick}
     >
       {/* Active indicator */}
       {isActive && (
@@ -107,10 +159,10 @@ const NavLink: React.FC<NavLinkProps> = ({ item, isCollapsed, isActive }) => {
           className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-brand-500 rounded-r"
         />
       )}
-      
+
       {/* Icon */}
       <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-brand-500' : ''}`} />
-      
+
       {/* Label */}
       <AnimatePresence>
         {!isCollapsed && (
@@ -124,21 +176,104 @@ const NavLink: React.FC<NavLinkProps> = ({ item, isCollapsed, isActive }) => {
           </motion.span>
         )}
       </AnimatePresence>
-      
+
       {/* Badge */}
       {item.badge && !isCollapsed && (
         <span className="ml-auto px-2 py-0.5 text-xs font-medium bg-brand-600/20 text-brand-500 rounded-full">
           {item.badge}
         </span>
       )}
-      
+
       {/* Tooltip for collapsed state */}
       {isCollapsed && (
         <div className="absolute left-full ml-2 px-2 py-1 bg-surface border border-border rounded text-sm text-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
           {item.label}
         </div>
       )}
-    </Link>
+    </div>
+  );
+
+  return onClick ? content : <Link href={item.href}>{content}</Link>;
+};
+
+// =============================================================================
+// THEME CUSTOMIZER MODAL
+// =============================================================================
+
+interface ThemeCustomizerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  isCollapsed: boolean;
+}
+
+const ThemeCustomizer: React.FC<ThemeCustomizerProps> = ({ isOpen, onClose, isCollapsed }) => {
+  const { theme } = useTheme();
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 20 }}
+        className={`
+          absolute bottom-20 ${isCollapsed ? 'left-20' : 'left-4 right-4'}
+          bg-surface-elevated border border-border rounded-xl shadow-2xl p-4 z-50
+        `}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Palette className="w-5 h-5 text-brand-500" />
+            <h3 className="font-semibold text-foreground">Theme Color</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-surface-hover rounded transition-colors"
+          >
+            <svg
+              className="w-4 h-4 text-foreground-muted"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Current theme */}
+        <div className="mb-4 p-3 bg-surface rounded-lg">
+          <div className="text-xs text-foreground-muted mb-1">Current Theme</div>
+          <div className="flex items-center gap-2">
+            <div
+              className="w-6 h-6 rounded-full border-2 border-white shadow-lg"
+              style={{ backgroundColor: theme.colors[600] }}
+            />
+            <span className="text-sm font-medium text-foreground">{theme.name}</span>
+          </div>
+        </div>
+
+        {/* Theme selector */}
+        <div>
+          <div className="text-xs text-foreground-muted mb-2">Choose Color</div>
+          <ThemeSelector className="justify-center" />
+        </div>
+
+        {/* Info */}
+        <div className="mt-4 pt-4 border-t border-border">
+          <p className="text-xs text-foreground-muted">
+            Theme preference is saved in your browser
+          </p>
+        </div>
+      </motion.div>
+    </AnimatePresence>
   );
 };
 
@@ -150,28 +285,29 @@ export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const { sidebarCollapsed, setSidebarCollapsed } = useUIStore();
   const { sessions } = useSessionStore();
-  
+  const [showThemeCustomizer, setShowThemeCustomizer] = useState(false);
+
   // Check which nav item is active
   const isActive = (href: string) => {
     if (href === '/chat') return pathname === '/chat' || pathname === '/';
     return pathname.startsWith(href);
   };
-  
+
   return (
     <motion.aside
       initial={false}
       animate={{ width: sidebarCollapsed ? 72 : 260 }}
       transition={{ duration: 0.2, ease: 'easeInOut' }}
-      className="flex flex-col h-full bg-surface-muted border-r border-border"
+      className="flex flex-col h-full bg-surface-muted border-r border-border relative"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
+      {/* Header - draggable in Electron frameless window */}
+      <div className="sidebar-header flex items-center justify-between p-4 border-b border-border" data-electron-drag="true">
         <Link href="/" className="flex items-center gap-3">
           {/* Logo */}
           <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center flex-shrink-0">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
-          
+
           {/* Title */}
           <AnimatePresence>
             {!sidebarCollapsed && (
@@ -191,7 +327,7 @@ export const Sidebar: React.FC = () => {
             )}
           </AnimatePresence>
         </Link>
-        
+
         {/* Collapse button */}
         <button
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -204,7 +340,7 @@ export const Sidebar: React.FC = () => {
           )}
         </button>
       </div>
-      
+
       {/* New chat button */}
       <div className="p-3">
         <Link
@@ -230,7 +366,7 @@ export const Sidebar: React.FC = () => {
           </AnimatePresence>
         </Link>
       </div>
-      
+
       {/* Search (when expanded) */}
       <AnimatePresence>
         {!sidebarCollapsed && (
@@ -251,7 +387,7 @@ export const Sidebar: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
-      
+
       {/* Main navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         <div className="space-y-1">
@@ -264,7 +400,7 @@ export const Sidebar: React.FC = () => {
             />
           ))}
         </div>
-        
+
         {/* Recent sessions */}
         <AnimatePresence>
           {!sidebarCollapsed && sessions.length > 0 && (
@@ -295,12 +431,48 @@ export const Sidebar: React.FC = () => {
           )}
         </AnimatePresence>
       </nav>
-      
+
       {/* Divider */}
       <div className="px-3">
         <div className="h-px bg-border" />
       </div>
-      
+
+      {/* Theme customizer button */}
+      <div className="px-3 pt-3">
+        <button
+          onClick={() => setShowThemeCustomizer(!showThemeCustomizer)}
+          className={`
+            relative flex items-center gap-3 px-3 py-2.5 rounded-lg w-full
+            transition-all duration-200 group
+            ${showThemeCustomizer
+              ? 'bg-brand-600/10 text-brand-500'
+              : 'text-foreground-secondary hover:text-foreground hover:bg-surface-hover'
+            }
+          `}
+        >
+          <Palette className={`w-5 h-5 flex-shrink-0 ${showThemeCustomizer ? 'text-brand-500' : ''}`} />
+          <AnimatePresence>
+            {!sidebarCollapsed && (
+              <motion.span
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: 'auto' }}
+                exit={{ opacity: 0, width: 0 }}
+                className="text-sm font-medium whitespace-nowrap overflow-hidden"
+              >
+                Theme Color
+              </motion.span>
+            )}
+          </AnimatePresence>
+
+          {/* Tooltip for collapsed state */}
+          {sidebarCollapsed && (
+            <div className="absolute left-full ml-2 px-2 py-1 bg-surface border border-border rounded text-sm text-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+              Theme Color
+            </div>
+          )}
+        </button>
+      </div>
+
       {/* Bottom navigation */}
       <nav className="p-3 space-y-1">
         {bottomNavItems.map((item) => (
@@ -312,7 +484,7 @@ export const Sidebar: React.FC = () => {
           />
         ))}
       </nav>
-      
+
       {/* User profile (placeholder) */}
       <div className="p-3 border-t border-border">
         <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-hover transition-colors cursor-pointer">
@@ -320,7 +492,7 @@ export const Sidebar: React.FC = () => {
           <div className="w-8 h-8 rounded-full bg-brand-600/20 flex items-center justify-center flex-shrink-0">
             <span className="text-sm font-medium text-brand-500">A</span>
           </div>
-          
+
           {/* User info */}
           <AnimatePresence>
             {!sidebarCollapsed && (
@@ -339,7 +511,7 @@ export const Sidebar: React.FC = () => {
               </motion.div>
             )}
           </AnimatePresence>
-          
+
           {/* Logout button */}
           {!sidebarCollapsed && (
             <button className="p-1.5 hover:bg-surface-active rounded transition-colors">
@@ -348,6 +520,13 @@ export const Sidebar: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Theme customizer modal */}
+      <ThemeCustomizer
+        isOpen={showThemeCustomizer}
+        onClose={() => setShowThemeCustomizer(false)}
+        isCollapsed={sidebarCollapsed}
+      />
     </motion.aside>
   );
 };

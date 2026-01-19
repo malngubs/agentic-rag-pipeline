@@ -1,24 +1,56 @@
 /**
  * Macrocomm Desktop App - Main Process
  * Handles system tray, global hotkeys, and window management
+ * Now with React frontend integration for premium UI
  */
 
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
+const http = require('http');
 
 // Initialize persistent storage
 const store = new Store({
     defaults: {
-        apiUrl: 'http://localhost:8000',
+        apiUrl: 'http://localhost:8001',
+        frontendUrl: 'http://localhost:3000',
         autoStart: true,
         alwaysOnTop: true,
-        theme: 'light',
+        theme: 'dark',
         hotkey: 'CommandOrControl+Shift+M',
-        windowBounds: { width: 400, height: 600 },
-        offlineMode: false
+        windowBounds: { width: 420, height: 700 },
+        offlineMode: false,
+        useReactUI: true  // Enable React frontend
     }
 });
+
+/**
+ * Check if a server is running on a given URL
+ */
+function checkServer(url) {
+    return new Promise((resolve) => {
+        const urlObj = new URL(url);
+        const options = {
+            hostname: urlObj.hostname,
+            port: urlObj.port || 80,
+            path: '/',
+            method: 'HEAD',
+            timeout: 2000
+        };
+
+        const req = http.request(options, (res) => {
+            resolve(res.statusCode < 500);
+        });
+
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => {
+            req.destroy();
+            resolve(false);
+        });
+
+        req.end();
+    });
+}
 
 let mainWindow = null;
 let tray = null;
@@ -27,7 +59,7 @@ let isQuitting = false;
 /**
  * Create the main application window
  */
-function createWindow() {
+async function createWindow() {
     // Get stored window bounds or defaults
     const bounds = store.get('windowBounds');
 
@@ -45,10 +77,11 @@ function createWindow() {
         x: x,
         y: y,
         show: false, // Don't show initially
-        frame: true,
+        frame: false, // Frameless window - completely removes title bar
         resizable: true,
         transparent: false,
         alwaysOnTop: store.get('alwaysOnTop'),
+        backgroundColor: '#0a0a0a', // Dark background for premium feel
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -59,8 +92,31 @@ function createWindow() {
         skipTaskbar: false
     });
 
-    // Load the app UI
-    mainWindow.loadFile(path.join(__dirname, 'index.html'));
+    // Remove application menu completely for professional look
+    Menu.setApplicationMenu(null);
+
+    // Determine which UI to load
+    const useReactUI = store.get('useReactUI');
+    const frontendUrl = store.get('frontendUrl');
+
+    if (useReactUI) {
+        // Check if React frontend is available
+        const frontendAvailable = await checkServer(frontendUrl);
+
+        if (frontendAvailable) {
+            // Load React frontend for premium UI
+            console.log('🎨 Loading React frontend from', frontendUrl);
+            mainWindow.loadURL(frontendUrl);
+        } else {
+            // Fallback to local HTML
+            console.log('⚠️ React frontend not available, using local UI');
+            console.log('   Start frontend with: cd frontend && npm run dev');
+            mainWindow.loadFile(path.join(__dirname, 'index.html'));
+        }
+    } else {
+        // Use local HTML UI
+        mainWindow.loadFile(path.join(__dirname, 'index.html'));
+    }
 
     // Open DevTools in development mode
     if (process.argv.includes('--dev')) {
@@ -84,6 +140,13 @@ function createWindow() {
     mainWindow.once('ready-to-show', () => {
         // Don't show automatically - wait for hotkey or tray click
         console.log('✅ Window ready (hidden)');
+    });
+
+    // Handle load errors gracefully
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+        console.error('❌ Failed to load:', errorDescription);
+        // Fallback to local UI
+        mainWindow.loadFile(path.join(__dirname, 'index.html'));
     });
 }
 
@@ -242,11 +305,13 @@ function setupIPC() {
     ipcMain.handle('get-config', () => {
         return {
             apiUrl: store.get('apiUrl'),
+            frontendUrl: store.get('frontendUrl'),
             autoStart: store.get('autoStart'),
             alwaysOnTop: store.get('alwaysOnTop'),
             theme: store.get('theme'),
             hotkey: store.get('hotkey'),
-            offlineMode: store.get('offlineMode')
+            offlineMode: store.get('offlineMode'),
+            useReactUI: store.get('useReactUI')
         };
     });
 
@@ -281,6 +346,13 @@ function setupIPC() {
         }
     });
 
+    // Open BI Platform dashboard
+    ipcMain.on('open-dashboard', () => {
+        const { shell } = require('electron');
+        shell.openExternal('http://localhost:3000');
+        console.log('📊 Opening BI Platform in browser');
+    });
+
     // Show notification
     ipcMain.on('show-notification', (event, { title, body }) => {
         const { Notification } = require('electron');
@@ -295,11 +367,12 @@ function setupIPC() {
 /**
  * App initialization
  */
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     console.log('🚀 Macrocomm Desktop App starting...');
+    console.log('🎨 Premium React UI enabled');
 
     // Create window and tray
-    createWindow();
+    await createWindow();
     createTray();
 
     // Register global hotkey
@@ -316,7 +389,8 @@ app.whenReady().then(() => {
     }
 
     console.log('✅ App initialized successfully');
-    console.log(`📍 API URL: ${store.get('apiUrl')}`);
+    console.log(`📍 Backend API: ${store.get('apiUrl')}`);
+    console.log(`🌐 Frontend URL: ${store.get('frontendUrl')}`);
     console.log(`⌨️  Global hotkey: ${store.get('hotkey')}`);
 });
 

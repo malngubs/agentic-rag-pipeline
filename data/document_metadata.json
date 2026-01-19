@@ -28,5 +28,15 @@
     "chunk_count": 1,
     "status": "indexed",
     "error_message": null
+  },
+  "7271d826-f2c0-41d7-b695-7986c9a03650": {
+    "doc_id": "7271d826-f2c0-41d7-b695-7986c9a03650",
+    "filename": "MG-VEH-EMG-BKL 202508.02.pdf",
+    "file_type": ".pdf",
+    "file_size": 689108,
+    "upload_date": "2026-01-12T14:37:50.880881",
+    "chunk_count": 22,
+    "status": "indexed",
+    "error_message": null
   }
 }

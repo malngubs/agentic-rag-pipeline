@@ -3,15 +3,200 @@
  * Handles UI interactions and API communication
  */
 
-// State
+// =============================================================================
+// THEME DEFINITIONS - Synced with ThemeProvider
+// =============================================================================
+
+const THEMES = {
+    orange: {
+        id: 'orange',
+        name: 'Sunset Orange',
+        colors: {
+            50: '#FFF7ED', 100: '#FFEDD5', 200: '#FED7AA', 300: '#FDBA74',
+            400: '#FB923C', 500: '#FF923F', 600: '#FF6E00', 700: '#E65100',
+            800: '#C2410C', 900: '#9A3412', 950: '#7C2D12'
+        }
+    },
+    blue: {
+        id: 'blue',
+        name: 'Ocean Blue',
+        colors: {
+            50: '#EFF6FF', 100: '#DBEAFE', 200: '#BFDBFE', 300: '#93C5FD',
+            400: '#60A5FA', 500: '#3B82F6', 600: '#2563EB', 700: '#1D4ED8',
+            800: '#1E40AF', 900: '#1E3A8A', 950: '#172554'
+        }
+    },
+    green: {
+        id: 'green',
+        name: 'Forest Green',
+        colors: {
+            50: '#ECFDF5', 100: '#D1FAE5', 200: '#A7F3D0', 300: '#6EE7B7',
+            400: '#34D399', 500: '#10B981', 600: '#059669', 700: '#047857',
+            800: '#065F46', 900: '#064E3B', 950: '#022C22'
+        }
+    },
+    purple: {
+        id: 'purple',
+        name: 'Royal Purple',
+        colors: {
+            50: '#FAF5FF', 100: '#F3E8FF', 200: '#E9D5FF', 300: '#D8B4FE',
+            400: '#C084FC', 500: '#A855F7', 600: '#9333EA', 700: '#7E22CE',
+            800: '#6B21A8', 900: '#581C87', 950: '#3B0764'
+        }
+    },
+    pink: {
+        id: 'pink',
+        name: 'Hot Pink',
+        colors: {
+            50: '#FDF2F8', 100: '#FCE7F3', 200: '#FBCFE8', 300: '#F9A8D4',
+            400: '#F472B6', 500: '#EC4899', 600: '#DB2777', 700: '#BE185D',
+            800: '#9D174D', 900: '#831843', 950: '#500724'
+        }
+    },
+    cyan: {
+        id: 'cyan',
+        name: 'Electric Cyan',
+        colors: {
+            50: '#ECFEFF', 100: '#CFFAFE', 200: '#A5F3FC', 300: '#67E8F9',
+            400: '#22D3EE', 500: '#06B6D4', 600: '#0891B2', 700: '#0E7490',
+            800: '#155E75', 900: '#164E63', 950: '#083344'
+        }
+    },
+    red: {
+        id: 'red',
+        name: 'Ruby Red',
+        colors: {
+            50: '#FEF2F2', 100: '#FEE2E2', 200: '#FECACA', 300: '#FCA5A5',
+            400: '#F87171', 500: '#EF4444', 600: '#DC2626', 700: '#B91C1C',
+            800: '#991B1B', 900: '#7F1D1D', 950: '#450A0A'
+        }
+    },
+    amber: {
+        id: 'amber',
+        name: 'Golden Amber',
+        colors: {
+            50: '#FFFBEB', 100: '#FEF3C7', 200: '#FDE68A', 300: '#FCD34D',
+            400: '#FBBF24', 500: '#F59E0B', 600: '#D97706', 700: '#B45309',
+            800: '#92400E', 900: '#78350F', 950: '#451A03'
+        }
+    }
+};
+
+const THEME_STORAGE_KEY = 'macrocomm-theme';
+
+// =============================================================================
+// STATE
+// =============================================================================
+
 let config = {};
 let conversationId = generateUUID();
 let isConnected = false;
 let messageHistory = [];
+let currentTheme = THEMES.orange;
+
+// =============================================================================
+// THEME FUNCTIONS
+// =============================================================================
+
+/**
+ * Apply theme to CSS variables
+ */
+function applyTheme(theme) {
+    if (!theme || !theme.colors) return;
+
+    const root = document.documentElement;
+
+    // Set all brand color shades as CSS variables
+    Object.entries(theme.colors).forEach(([shade, color]) => {
+        root.style.setProperty(`--color-brand-${shade}`, color);
+    });
+
+    // Set RGB values for rgba() usage
+    const hexToRgb = (hex) => {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result
+            ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
+            : '255, 110, 0';
+    };
+
+    root.style.setProperty('--color-brand-rgb', hexToRgb(theme.colors[600]));
+
+    // Update current theme
+    currentTheme = theme;
+
+    console.log(`🎨 Theme applied: ${theme.name}`);
+}
+
+/**
+ * Load theme from localStorage
+ */
+function loadTheme() {
+    try {
+        const savedThemeId = localStorage.getItem(THEME_STORAGE_KEY);
+        if (savedThemeId && THEMES[savedThemeId]) {
+            applyTheme(THEMES[savedThemeId]);
+            return THEMES[savedThemeId];
+        }
+    } catch (e) {
+        console.warn('Failed to load theme from storage:', e);
+    }
+
+    // Default to orange
+    applyTheme(THEMES.orange);
+    return THEMES.orange;
+}
+
+/**
+ * Listen for theme changes from other windows/tabs
+ */
+function setupThemeSync() {
+    // Listen for storage changes (when React frontend changes theme)
+    window.addEventListener('storage', (event) => {
+        if (event.key === THEME_STORAGE_KEY && event.newValue) {
+            const theme = THEMES[event.newValue];
+            if (theme) {
+                applyTheme(theme);
+                console.log('🔄 Theme synced from storage:', theme.name);
+            }
+        }
+    });
+
+    // Listen for custom theme change events
+    window.addEventListener('macrocomm-theme-change', (event) => {
+        if (event.detail?.themeId) {
+            const theme = THEMES[event.detail.themeId];
+            if (theme) {
+                applyTheme(theme);
+                console.log('🔄 Theme synced via event:', theme.name);
+            }
+        }
+    });
+
+    // Periodically check localStorage for theme changes (fallback sync)
+    setInterval(() => {
+        try {
+            const savedThemeId = localStorage.getItem(THEME_STORAGE_KEY);
+            if (savedThemeId && THEMES[savedThemeId] && currentTheme.id !== savedThemeId) {
+                applyTheme(THEMES[savedThemeId]);
+                console.log('🔄 Theme synced via polling:', THEMES[savedThemeId].name);
+            }
+        } catch (e) {
+            // Ignore errors
+        }
+    }, 2000); // Check every 2 seconds
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
 
 // Initialize app
 async function init() {
     console.log('🚀 Initializing desktop app...');
+
+    // Load and apply theme first (before content renders)
+    loadTheme();
+    setupThemeSync();
 
     // Load configuration
     config = await window.electronAPI.getConfig();
@@ -400,6 +585,19 @@ async function saveSettings() {
  */
 function minimizeWindow() {
     window.electronAPI.minimizeToTray();
+}
+
+/**
+ * Open BI Platform dashboard in browser
+ */
+function openDashboard() {
+    // Use IPC to open in default browser
+    window.electronAPI.openDashboard();
+
+    // Add message to chat
+    addMessage('assistant', '🎨 Opening BI Platform in your browser...');
+
+    console.log('📊 Opening BI Platform');
 }
 
 /**

@@ -53,15 +53,9 @@ const nextConfig = {
     ];
   },
   
-  // Redirects
+  // Redirects (none needed - /chat is the main page)
   async redirects() {
-    return [
-      {
-        source: '/chat',
-        destination: '/',
-        permanent: false,
-      },
-    ];
+    return [];
   },
 };
 

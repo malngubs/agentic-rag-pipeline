@@ -1,4 +1,67 @@
-/* Macrocomm Desktop App - Styles */
+/**
+ * ============================================================================
+ * Macrocomm Desktop App - Premium Styles
+ * ============================================================================
+ *
+ * Consistent font stack and branding across all Macrocomm platforms.
+ * Colors: Macrocomm Orange (#FF6E00)
+ * Fonts: Inter, Segoe UI (system), JetBrains Mono (code)
+ */
+
+/* =============================================================================
+   CSS VARIABLES
+   ============================================================================= */
+
+:root {
+    /* =========================================
+       BRAND COLORS (Dynamic - synced with ThemeProvider)
+       Default: Macrocomm Orange
+       ========================================= */
+    --color-brand-50: #FFF7ED;
+    --color-brand-100: #FFEDD5;
+    --color-brand-200: #FED7AA;
+    --color-brand-300: #FDBA74;
+    --color-brand-400: #FB923C;
+    --color-brand-500: #FF923F;
+    --color-brand-600: #FF6E00;
+    --color-brand-700: #E65100;
+    --color-brand-800: #C2410C;
+    --color-brand-900: #9A3412;
+    --color-brand-950: #7C2D12;
+
+    /* RGB values for rgba() usage */
+    --color-brand-rgb: 255, 110, 0;
+
+    /* Legacy aliases for backward compatibility */
+    --brand-primary: var(--color-brand-600);
+    --brand-secondary: var(--color-brand-500);
+    --brand-dark: var(--color-brand-700);
+
+    /* Background Colors */
+    --bg-primary: #0A0F1C;
+    --bg-secondary: #1A1F2E;
+    --bg-tertiary: #252B3B;
+    --bg-input: #f8f9fa;
+
+    /* Text Colors */
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --text-muted: #999999;
+    --text-light: #F1F5F9;
+
+    /* Border Colors */
+    --border-color: #e0e0e0;
+    --border-focus: var(--color-brand-600);
+
+    /* Status Colors */
+    --success: #10b981;
+    --error: #ef4444;
+    --warning: #f59e0b;
+}
+
+/* =============================================================================
+   RESET & BASE
+   ============================================================================= */
 
 * {
     margin: 0;
@@ -7,18 +70,32 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    /* Premium font stack - consistent across all Macrocomm platforms */
+    font-family:
+        'Inter',
+        'Segoe UI',
+        -apple-system,
+        BlinkMacSystemFont,
+        'Roboto',
+        'Helvetica Neue',
+        Arial,
+        sans-serif;
     background: #ffffff;
-    color: #1a1a1a;
+    color: var(--text-primary);
     overflow: hidden;
     height: 100vh;
     display: flex;
     flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-/* Header */
+/* =============================================================================
+   HEADER
+   ============================================================================= */
+
 .app-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
     color: white;
     padding: 12px 16px;
     -webkit-app-region: drag;
@@ -63,7 +140,10 @@ body {
     background: rgba(255, 255, 255, 0.3);
 }
 
-/* Main Content */
+/* =============================================================================
+   MAIN CONTENT
+   ============================================================================= */
+
 .app-content {
     flex: 1;
     display: flex;
@@ -71,11 +151,14 @@ body {
     overflow: hidden;
 }
 
-/* Search Bar */
+/* =============================================================================
+   SEARCH BAR
+   ============================================================================= */
+
 .search-container {
     padding: 12px 16px;
-    background: #f8f9fa;
-    border-bottom: 1px solid #e0e0e0;
+    background: var(--bg-input);
+    border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
 }
 
@@ -83,18 +166,18 @@ body {
     display: flex;
     align-items: center;
     background: white;
-    border: 2px solid #e0e0e0;
+    border: 2px solid var(--border-color);
     border-radius: 8px;
     padding: 8px 12px;
     transition: border-color 0.2s;
 }
 
 .search-box:focus-within {
-    border-color: #667eea;
+    border-color: var(--brand-primary);
 }
 
 .search-icon {
-    color: #999;
+    color: var(--text-muted);
     margin-right: 8px;
     flex-shrink: 0;
 }
@@ -104,14 +187,18 @@ body {
     border: none;
     outline: none;
     font-size: 14px;
-    color: #1a1a1a;
+    font-family: inherit;
+    color: var(--text-primary);
 }
 
-/* Status Bar */
+/* =============================================================================
+   STATUS BAR
+   ============================================================================= */
+
 .status-bar {
     padding: 8px 16px;
-    background: #f8f9fa;
-    border-bottom: 1px solid #e0e0e0;
+    background: var(--bg-input);
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -123,7 +210,7 @@ body {
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .status-dot {
@@ -134,11 +221,12 @@ body {
 }
 
 .status-dot.online {
-    background: #10b981;
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
 }
 
 .status-dot.offline {
-    background: #ef4444;
+    background: var(--error);
 }
 
 .offline-badge {
@@ -146,13 +234,16 @@ body {
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: #ef4444;
+    color: var(--error);
     background: #fee2e2;
     padding: 4px 8px;
     border-radius: 4px;
 }
 
-/* Chat Messages */
+/* =============================================================================
+   CHAT MESSAGES
+   ============================================================================= */
+
 .chat-messages {
     flex: 1;
     overflow-y: auto;
@@ -187,7 +278,7 @@ body {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -197,7 +288,7 @@ body {
 
 .message.user .message-avatar {
     background: #e0e0e0;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .message-content {
@@ -210,7 +301,7 @@ body {
 }
 
 .message.user .message-content {
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     color: white;
 }
 
@@ -219,6 +310,10 @@ body {
     font-size: 13px;
     opacity: 0.7;
 }
+
+/* =============================================================================
+   QUICK ACTIONS
+   ============================================================================= */
 
 .quick-actions {
     margin-top: 12px;
@@ -229,25 +324,29 @@ body {
 
 .quick-btn {
     background: white;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--border-color);
     padding: 8px 12px;
     border-radius: 6px;
     font-size: 13px;
+    font-family: inherit;
     cursor: pointer;
     text-align: left;
     transition: all 0.2s;
 }
 
 .quick-btn:hover {
-    background: #f8f9fa;
-    border-color: #667eea;
+    background: var(--bg-input);
+    border-color: var(--brand-primary);
 }
 
-/* Chat Input */
+/* =============================================================================
+   CHAT INPUT
+   ============================================================================= */
+
 .chat-input-container {
     padding: 16px;
-    background: #f8f9fa;
-    border-top: 1px solid #e0e0e0;
+    background: var(--bg-input);
+    border-top: 1px solid var(--border-color);
     flex-shrink: 0;
 }
 
@@ -259,7 +358,7 @@ body {
 
 .chat-input {
     flex: 1;
-    border: 2px solid #e0e0e0;
+    border: 2px solid var(--border-color);
     border-radius: 8px;
     padding: 10px 12px;
     font-size: 14px;
@@ -271,11 +370,11 @@ body {
 }
 
 .chat-input:focus {
-    border-color: #667eea;
+    border-color: var(--brand-primary);
 }
 
 .send-btn {
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     border: none;
     color: white;
     width: 40px;
@@ -285,23 +384,25 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s, transform 0.2s;
     flex-shrink: 0;
 }
 
 .send-btn:hover {
     opacity: 0.9;
+    transform: scale(1.05);
 }
 
 .send-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    transform: none;
 }
 
 .input-hint {
     margin-top: 8px;
     font-size: 11px;
-    color: #999;
+    color: var(--text-muted);
     text-align: center;
 }
 
@@ -310,11 +411,14 @@ kbd {
     border: 1px solid #d0d0d0;
     border-radius: 3px;
     padding: 2px 6px;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
     font-size: 10px;
 }
 
-/* Settings Panel */
+/* =============================================================================
+   SETTINGS PANEL
+   ============================================================================= */
+
 .settings-panel {
     position: absolute;
     top: 0;
@@ -327,7 +431,7 @@ kbd {
 }
 
 .settings-header {
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     color: white;
     padding: 16px;
     display: flex;
@@ -358,21 +462,22 @@ kbd {
 
 .setting-input {
     width: 100%;
-    border: 2px solid #e0e0e0;
+    border: 2px solid var(--border-color);
     border-radius: 6px;
     padding: 10px 12px;
     font-size: 14px;
+    font-family: inherit;
     outline: none;
     transition: border-color 0.2s;
 }
 
 .setting-input:focus {
-    border-color: #667eea;
+    border-color: var(--brand-primary);
 }
 
 .setting-hint {
     font-size: 12px;
-    color: #999;
+    color: var(--text-muted);
     margin-top: 4px;
 }
 
@@ -388,6 +493,7 @@ kbd {
     width: 18px;
     height: 18px;
     cursor: pointer;
+    accent-color: var(--brand-primary);
 }
 
 .setting-actions {
@@ -403,31 +509,36 @@ kbd {
     border-radius: 8px;
     font-size: 14px;
     font-weight: 600;
+    font-family: inherit;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     border: none;
     color: white;
 }
 
 .btn-primary:hover {
     opacity: 0.9;
+    transform: translateY(-1px);
 }
 
 .btn-secondary {
     background: white;
-    border: 2px solid #e0e0e0;
+    border: 2px solid var(--border-color);
     color: #333;
 }
 
 .btn-secondary:hover {
-    border-color: #667eea;
+    border-color: var(--brand-primary);
 }
 
-/* Scrollbar */
+/* =============================================================================
+   SCROLLBAR
+   ============================================================================= */
+
 ::-webkit-scrollbar {
     width: 8px;
 }
@@ -445,21 +556,24 @@ kbd {
     background: #a0a0a0;
 }
 
-/* Loading */
+/* =============================================================================
+   LOADING
+   ============================================================================= */
+
 .loading {
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
-    color: #999;
+    color: var(--text-muted);
     font-size: 14px;
 }
 
 .spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid #e0e0e0;
-    border-top-color: #667eea;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--brand-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-right: 10px;
@@ -467,4 +581,33 @@ kbd {
 
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* =============================================================================
+   CODE BLOCKS
+   ============================================================================= */
+
+code, pre {
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', 'Fira Code', monospace;
+}
+
+code {
+    background: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+pre {
+    background: #1a1a1a;
+    color: #f0f0f0;
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 8px 0;
+}
+
+pre code {
+    background: transparent;
+    padding: 0;
 }

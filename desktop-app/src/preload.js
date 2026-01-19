@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Window controls
     minimizeToTray: () => ipcRenderer.send('minimize-to-tray'),
+    openDashboard: () => ipcRenderer.send('open-dashboard'),
 
     // Notifications
     showNotification: (title, body) => ipcRenderer.send('show-notification', { title, body }),

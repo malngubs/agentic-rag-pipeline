@@ -17,7 +17,7 @@ class MacrocommBubbleChatbot {
         this.config = {
             position: config.position || 'bottom-right',
             theme: config.theme || 'light',
-            apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8000',
+            apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8001',
             primaryColor: config.primaryColor || '#FF6E00',
             secondaryColor: config.secondaryColor || '#FF923F',
             enableStreaming: config.enableStreaming !== false, // Default: true
@@ -291,11 +291,18 @@ class MacrocommBubbleChatbot {
                         </div>
                     </div>
                 </div>
-                <button class="close-btn" onclick="macrocommChat.toggleChat()">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                    </svg>
-                </button>
+                <div class="header-actions">
+                    <button class="dashboard-btn" onclick="macrocommChat.openDashboard()" title="Open BI Platform">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                            <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+                        </svg>
+                    </button>
+                    <button class="close-btn" onclick="macrocommChat.toggleChat()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
 
             <!-- ✨ PHASE 5: Tab Bar -->
@@ -458,6 +465,13 @@ class MacrocommBubbleChatbot {
                 animation: pulse 2s infinite;
             }
             
+            .macrocomm-chat-window .header-actions {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            .macrocomm-chat-window .dashboard-btn,
             .macrocomm-chat-window .close-btn {
                 background: none;
                 border: none;
@@ -466,7 +480,8 @@ class MacrocommBubbleChatbot {
                 border-radius: 8px;
                 transition: background 0.2s;
             }
-            
+
+            .macrocomm-chat-window .dashboard-btn:hover,
             .macrocomm-chat-window .close-btn:hover {
                 background: rgba(255, 255, 255, 0.2);
             }
@@ -1243,7 +1258,16 @@ class MacrocommBubbleChatbot {
             this.inputField.focus();
         }
     }
-    
+
+    openDashboard() {
+        // Open BI Platform in new tab
+        const biPlatformUrl = 'http://localhost:3000';
+        window.open(biPlatformUrl, '_blank');
+
+        // Optional: Show notification that dashboard is opening
+        this.addBotMessage('🎨 Opening BI Platform dashboard in a new tab...');
+    }
+
     updateStatus(status) {
         const statusDot = this.chatWindow.querySelector('.status-dot');
         const statusText = this.chatWindow.querySelector('.status-text');
@@ -1327,7 +1351,7 @@ if (document.readyState === 'loading') {
 
 function initMacrocommChat() {
     macrocommChat = new MacrocommBubbleChatbot({
-        apiBaseUrl: 'http://localhost:8000', // Change to your server URL
+        apiBaseUrl: 'http://localhost:8001', // Change to your server URL
         enableStreaming: true,
         enableVoice: true,
         enableFollowUps: true

@@ -4,18 +4,24 @@
  * ============================================================================
  * 
  * The main conversational interface for the BI platform.
+ * 
+ * FIXED:
+ * - Properly connects to /ws/chat/stream WebSocket
+ * - Falls back to REST API (/api/chat) if WebSocket fails
+ * - Handles streaming responses correctly
+ * - Shows source citations from RAG
+ * 
  * Features:
- * - Natural language queries
+ * - Natural language queries with RAG
  * - Real-time streaming responses
  * - File upload with drag-and-drop
- * - Rich message formatting (markdown, code, charts)
- * - Keyboard shortcuts
+ * - Rich message formatting
+ * - Source citations display
  */
 
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
   Send,
   Paperclip,
@@ -26,12 +32,43 @@ import {
   FileSpreadsheet,
   MessageSquare,
   ArrowDown,
-  Mic,
-  StopCircle,
+  CheckCircle2,
+  AlertCircle,
+  FileText,
+  RefreshCw,
 } from 'lucide-react';
-import { useChatStore, useSessionStore, useUIStore, toast } from '@/lib/stores';
-import { api } from '@/lib/api/client';
-import type { ChatMessage, QueryResult, UploadedFile } from '@/types';
+import { api, ChatWebSocket, ChatResponse } from '@/lib/api/client';
+import {
+  ChartWidget,
+  DashboardWidget,
+  KPICard,
+  DataTable
+} from '@/components/visualizations';
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  status: 'sending' | 'streaming' | 'complete' | 'error';
+  sources?: Array<{
+    document_name: string;
+    chunk_text: string;
+    similarity_score: number;
+  }>;
+  visualizations?: Array<{
+    type: 'chart' | 'dashboard' | 'table' | 'kpi';
+    data: any;
+    title?: string;
+    description?: string;
+  }>;
+  executionTime?: number;
+  error?: string;
+}
 
 // =============================================================================
 // MESSAGE COMPONENT
@@ -45,141 +82,165 @@ interface MessageProps {
 const Message: React.FC<MessageProps> = ({ message, isLast }) => {
   const isUser = message.role === 'user';
   const isStreaming = message.status === 'streaming';
+  const [showSources, setShowSources] = useState(false);
   
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className={`flex gap-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
+    <div
+      className={`flex gap-4 animate-slide-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
     >
       {/* Avatar */}
       <div
         className={`
-          flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
+          flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
           ${isUser 
-            ? 'bg-brand-600 text-white' 
-            : 'bg-surface-hover border border-border'
+            ? 'glossy-button' 
+            : 'glass border border-white/10'
           }
         `}
       >
         {isUser ? (
-          <span className="text-sm font-medium">U</span>
+          <span className="text-sm font-semibold text-white">U</span>
         ) : (
-          <Sparkles className="w-4 h-4 text-brand-500" />
+          <Sparkles className="w-4 h-4 text-[var(--color-brand-500)]" />
         )}
       </div>
       
       {/* Message content */}
       <div
         className={`
-          max-w-[75%] rounded-2xl px-4 py-3
+          max-w-[75%] rounded-2xl px-4 py-3 transition-all duration-200
           ${isUser
-            ? 'bg-brand-600/10 border border-brand-600/20 rounded-br-md'
-            : 'bg-surface border border-border rounded-bl-md'
+            ? 'chat-message-user'
+            : 'chat-message-assistant glossy-card'
           }
         `}
       >
         {/* Main content */}
         <div className="chat-content">
-          {message.content}
-          {isStreaming && (
-            <span className="inline-block w-2 h-4 bg-brand-500 ml-1 animate-blink" />
+          {message.content || (isStreaming && (
+            <span className="typing-indicator">
+              <span></span>
+              <span></span>
+              <span></span>
+            </span>
+          ))}
+          {isStreaming && message.content && (
+            <span className="inline-block w-2 h-5 bg-[var(--color-brand-500)] ml-1 animate-blink rounded-sm" />
           )}
         </div>
         
-        {/* Charts */}
-        {message.charts && message.charts.length > 0 && (
-          <div className="mt-4 space-y-3">
-            {message.charts.map((chart, index) => (
-              <div
-                key={chart.id || index}
-                className="bg-surface-muted rounded-lg p-4 border border-border"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <BarChart3 className="w-4 h-4 text-brand-500" />
-                  <span className="text-sm font-medium text-foreground">
-                    {chart.title || `Chart ${index + 1}`}
-                  </span>
-                </div>
-                {chart.html ? (
-                  <div
-                    className="plotly-chart-container"
-                    dangerouslySetInnerHTML={{ __html: chart.html }}
-                  />
-                ) : (
-                  <div className="h-48 flex items-center justify-center text-foreground-muted">
-                    Chart visualization
-                  </div>
-                )}
-              </div>
-            ))}
+        {/* Visualizations - render charts, dashboards, tables inline */}
+        {message.visualizations && message.visualizations.length > 0 && (
+          <div className="mt-4 space-y-4">
+            {message.visualizations.map((viz, index) => {
+              switch (viz.type) {
+                case 'chart':
+                  return (
+                    <ChartWidget
+                      key={index}
+                      chartData={viz.data}
+                      title={viz.title}
+                      description={viz.description}
+                    />
+                  );
+                case 'dashboard':
+                  return (
+                    <DashboardWidget
+                      key={index}
+                      dashboard={viz.data}
+                    />
+                  );
+                case 'table':
+                  return (
+                    <DataTable
+                      key={index}
+                      data={viz.data}
+                      title={viz.title}
+                    />
+                  );
+                case 'kpi':
+                  return (
+                    <KPICard
+                      key={index}
+                      {...viz.data}
+                    />
+                  );
+                default:
+                  return null;
+              }
+            })}
           </div>
         )}
-        
-        {/* Insights */}
-        {message.insights && message.insights.length > 0 && (
-          <div className="mt-4 space-y-2">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-brand-500" />
-              <span className="text-sm font-medium text-foreground">
-                Key Insights
-              </span>
-            </div>
-            <ul className="space-y-1">
-              {message.insights.map((insight, index) => (
-                <li
-                  key={index}
-                  className="text-sm text-foreground-secondary flex items-start gap-2"
-                >
-                  <span className="text-brand-500 mt-1">•</span>
-                  <span>{insight}</span>
-                </li>
-              ))}
-            </ul>
+
+        {/* Sources - show citations from RAG */}
+        {message.sources && message.sources.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-white/10">
+            <button
+              onClick={() => setShowSources(!showSources)}
+              className="flex items-center gap-2 text-sm text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+            >
+              <FileText className="w-4 h-4" />
+              <span>{message.sources.length} source{message.sources.length > 1 ? 's' : ''}</span>
+              <span className={`transform transition-transform ${showSources ? 'rotate-180' : ''}`}>▼</span>
+            </button>
+
+            {showSources && (
+              <div className="mt-2 space-y-2">
+                {message.sources.map((source, index) => (
+                  <div
+                    key={index}
+                    className="p-3 bg-[var(--color-surface-muted)] rounded-lg border border-[var(--color-border)]"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <FileSpreadsheet className="w-4 h-4 text-[var(--color-brand-500)]" />
+                      <span className="text-sm font-medium text-[var(--color-foreground)]">
+                        {source.document_name}
+                      </span>
+                      <span className="text-xs text-[var(--color-foreground-subtle)] ml-auto">
+                        {(source.similarity_score * 100).toFixed(0)}% match
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--color-foreground-muted)] line-clamp-2">
+                      {source.chunk_text}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         
         {/* Metadata */}
         {message.status === 'complete' && message.executionTime && (
-          <div className="mt-2 text-xs text-foreground-muted">
-            Completed in {message.executionTime.toFixed(2)}s
+          <div className="mt-2 flex items-center gap-2 text-xs text-[var(--color-foreground-subtle)]">
+            <CheckCircle2 className="w-3 h-3 text-[var(--color-success)]" />
+            <span>Completed in {message.executionTime.toFixed(2)}s</span>
           </div>
         )}
         
         {/* Error */}
         {message.error && (
-          <div className="mt-2 text-sm text-error">
-            {message.error}
+          <div className="mt-2 flex items-center gap-2 text-sm text-[var(--color-error)]">
+            <AlertCircle className="w-4 h-4" />
+            <span>{message.error}</span>
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 };
 
 // =============================================================================
-// FILE UPLOAD PREVIEW
+// FILE PREVIEW
 // =============================================================================
 
 interface FilePreviewProps {
   file: File;
   onRemove: () => void;
+  uploadProgress?: number;
 }
 
-const FilePreview: React.FC<FilePreviewProps> = ({ file, onRemove }) => {
-  const getFileIcon = () => {
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'xlsx':
-      case 'xls':
-      case 'csv':
-        return <FileSpreadsheet className="w-5 h-5 text-success" />;
-      default:
-        return <FileSpreadsheet className="w-5 h-5 text-foreground-muted" />;
-    }
-  };
-  
+const FilePreview: React.FC<FilePreviewProps> = ({ file, onRemove, uploadProgress }) => {
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -187,21 +248,29 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, onRemove }) => {
   };
   
   return (
-    <div className="flex items-center gap-3 bg-surface-hover rounded-lg px-3 py-2 border border-border">
-      {getFileIcon()}
+    <div className="flex items-center gap-3 p-3 glass rounded-lg">
+      <FileSpreadsheet className="w-5 h-5 text-[var(--color-success)]" />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-foreground truncate">
+        <div className="text-sm font-medium text-[var(--color-foreground)] truncate">
           {file.name}
         </div>
-        <div className="text-xs text-foreground-muted">
+        <div className="text-xs text-[var(--color-foreground-muted)]">
           {formatSize(file.size)}
         </div>
+        {uploadProgress !== undefined && uploadProgress < 100 && (
+          <div className="mt-1 h-1 bg-[var(--color-surface-muted)] rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-[var(--color-brand-600)] transition-all duration-300"
+              style={{ width: `${uploadProgress}%` }}
+            />
+          </div>
+        )}
       </div>
       <button
         onClick={onRemove}
-        className="p-1 hover:bg-surface-active rounded transition-colors"
+        className="p-1.5 hover:bg-[var(--color-surface-active)] rounded-lg transition-colors"
       >
-        <X className="w-4 h-4 text-foreground-muted" />
+        <X className="w-4 h-4 text-[var(--color-foreground-muted)]" />
       </button>
     </div>
   );
@@ -284,29 +353,22 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        relative rounded-2xl border transition-all duration-200
+        relative rounded-2xl transition-all duration-200 glossy-card
         ${isDragging
-          ? 'border-brand-500 bg-brand-600/5'
-          : 'border-border bg-surface hover:border-border-light'
+          ? 'border-[var(--color-brand-500)] bg-[var(--color-brand-600)]/5'
+          : 'border-[var(--color-border)]'
         }
         ${disabled ? 'opacity-50 pointer-events-none' : ''}
       `}
     >
       {/* Drag overlay */}
-      <AnimatePresence>
-        {isDragging && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 flex items-center justify-center bg-brand-600/10 rounded-2xl z-10"
-          >
-            <div className="text-brand-500 font-medium">
-              Drop file here
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {isDragging && (
+        <div className="absolute inset-0 flex items-center justify-center glass-brand rounded-2xl z-10">
+          <div className="text-[var(--color-brand-500)] font-medium">
+            Drop file here
+          </div>
+        </div>
+      )}
       
       {/* File preview */}
       {selectedFile && (
@@ -323,16 +385,16 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
         {/* File upload button */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex-shrink-0 p-2 hover:bg-surface-hover rounded-lg transition-colors"
+          className="flex-shrink-0 p-2.5 hover:bg-[var(--color-surface-hover)] rounded-xl transition-colors"
           title="Attach file"
         >
-          <Paperclip className="w-5 h-5 text-foreground-muted" />
+          <Paperclip className="w-5 h-5 text-[var(--color-foreground-muted)]" />
         </button>
         <input
           ref={fileInputRef}
           type="file"
           onChange={handleFileSelect}
-          accept=".csv,.xlsx,.xls,.json,.pdf,.txt"
+          accept=".csv,.xlsx,.xls,.json,.pdf,.txt,.doc,.docx"
           className="hidden"
         />
         
@@ -344,10 +406,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
           onKeyDown={handleKeyDown}
           placeholder="Ask me anything about your data..."
           rows={1}
-          className={`
-            flex-1 resize-none bg-transparent text-foreground placeholder:text-foreground-muted
-            focus:outline-none text-sm leading-relaxed max-h-48 scrollbar-thin
-          `}
+          className="flex-1 resize-none bg-transparent text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus:outline-none text-[15px] leading-relaxed max-h-48 scrollbar-thin py-2"
         />
         
         {/* Send button */}
@@ -355,10 +414,10 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
           onClick={handleSubmit}
           disabled={(!input.trim() && !selectedFile) || isLoading}
           className={`
-            flex-shrink-0 p-2 rounded-lg transition-all duration-200
+            flex-shrink-0 p-2.5 rounded-xl transition-all duration-200
             ${input.trim() || selectedFile
-              ? 'bg-brand-600 text-white hover:bg-brand-500'
-              : 'bg-surface-hover text-foreground-muted'
+              ? 'glossy-button text-white'
+              : 'bg-[var(--color-surface-hover)] text-[var(--color-foreground-muted)]'
             }
             disabled:opacity-50 disabled:cursor-not-allowed
           `}
@@ -372,8 +431,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
       </div>
       
       {/* Keyboard hint */}
-      <div className="px-4 pb-2 text-xs text-foreground-muted">
-        Press <kbd className="px-1.5 py-0.5 bg-surface-muted rounded text-foreground-muted">Enter</kbd> to send, <kbd className="px-1.5 py-0.5 bg-surface-muted rounded text-foreground-muted">Shift + Enter</kbd> for new line
+      <div className="px-4 pb-3 text-xs text-[var(--color-foreground-subtle)]">
+        Press <kbd className="px-1.5 py-0.5 bg-[var(--color-surface-muted)] rounded text-[var(--color-foreground-muted)] font-mono">Enter</kbd> to send, <kbd className="px-1.5 py-0.5 bg-[var(--color-surface-muted)] rounded text-[var(--color-foreground-muted)] font-mono">Shift + Enter</kbd> for new line
       </div>
     </div>
   );
@@ -383,77 +442,176 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isLoading, disabled }) =>
 // EMPTY STATE
 // =============================================================================
 
-const EmptyState: React.FC = () => {
-  const suggestions = [
+interface EmptyStateProps {
+  onSuggestionClick: (text: string) => void;
+  onUploadClick: () => void;
+}
+
+const EmptyState: React.FC<EmptyStateProps> = ({ onSuggestionClick, onUploadClick }) => {
+  const primarySuggestions = [
     {
       icon: FileSpreadsheet,
       title: 'Upload your data',
-      description: 'Drag & drop CSV, Excel, or other data files',
+      description: 'Drag & drop CSV, Excel, PDF, or JSON files',
+      action: 'upload' as const,
     },
     {
       icon: MessageSquare,
       title: 'Ask questions',
       description: '"Show me sales trends by region"',
+      query: 'Show me sales trends by region',
     },
     {
       icon: BarChart3,
       title: 'Create visualizations',
       description: '"Create a dashboard with key metrics"',
+      query: 'Create a dashboard with key metrics',
     },
     {
       icon: Sparkles,
       title: 'Get insights',
       description: '"What are the key insights from this data?"',
+      query: 'What are the key insights from this data?',
     },
   ];
-  
+
+  const analysisSuggestions = [
+    {
+      title: 'Forecast sales for the next 12 months',
+      icon: '📈',
+    },
+    {
+      title: 'Run correlation analysis on my data',
+      icon: '🔗',
+    },
+    {
+      title: 'Perform statistical hypothesis testing',
+      icon: '🧪',
+    },
+    {
+      title: 'Profile my data and show quality metrics',
+      icon: '📊',
+    },
+    {
+      title: 'Identify anomalies and outliers',
+      icon: '🎯',
+    },
+    {
+      title: 'Generate a financial summary report',
+      icon: '💰',
+    },
+  ];
+
+  const handleClick = (suggestion: typeof primarySuggestions[0]) => {
+    if ('action' in suggestion && suggestion.action === 'upload') {
+      onUploadClick();
+    } else if ('query' in suggestion && suggestion.query) {
+      onSuggestionClick(suggestion.query);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-8">
       {/* Logo/Title */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="text-center mb-12"
-      >
-        <div className="w-16 h-16 rounded-2xl bg-brand-600/10 border border-brand-600/20 flex items-center justify-center mx-auto mb-4">
-          <Sparkles className="w-8 h-8 text-brand-500" />
+      <div className="text-center mb-10 animate-fade-in">
+        <div className="w-20 h-20 rounded-2xl glass-brand flex items-center justify-center mx-auto mb-6 card-glow">
+          <Sparkles className="w-10 h-10 text-[var(--color-brand-500)]" />
         </div>
-        <h1 className="text-2xl font-display font-bold text-foreground mb-2">
+        <h1 className="text-3xl font-bold text-[var(--color-foreground)] mb-3">
           Macrocomm BI Assistant
         </h1>
-        <p className="text-foreground-secondary max-w-md">
-          Ask questions in natural language, upload your data, and get AI-powered insights and visualizations.
+        <p className="text-[var(--color-foreground-muted)] max-w-lg text-lg">
+          Your AI-powered data analyst. Upload data, ask questions, create forecasts, and get intelligent insights.
         </p>
-      </motion.div>
-      
-      {/* Suggestion cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl w-full">
-        {suggestions.map((suggestion, index) => (
-          <motion.div
+      </div>
+
+      {/* Primary suggestion cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl w-full mb-8">
+        {primarySuggestions.map((suggestion, index) => (
+          <div
             key={suggestion.title}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: index * 0.1 }}
-            className="card-interactive cursor-pointer group"
+            onClick={() => handleClick(suggestion)}
+            className="card-interactive card-glow group animate-slide-in cursor-pointer"
+            style={{ animationDelay: `${index * 0.1}s` }}
           >
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-lg bg-brand-600/10 group-hover:bg-brand-600/20 transition-colors">
-                <suggestion.icon className="w-5 h-5 text-brand-500" />
+            <div className="flex items-start gap-4">
+              <div className="p-3 rounded-xl glass-brand group-hover:scale-110 transition-transform">
+                <suggestion.icon className="w-5 h-5 text-[var(--color-brand-500)]" />
               </div>
               <div>
-                <div className="font-medium text-foreground mb-1">
+                <div className="font-semibold text-[var(--color-foreground)] mb-1">
                   {suggestion.title}
                 </div>
-                <div className="text-sm text-foreground-muted">
+                <div className="text-sm text-[var(--color-foreground-muted)]">
                   {suggestion.description}
                 </div>
               </div>
             </div>
-          </motion.div>
+          </div>
         ))}
       </div>
+
+      {/* Analysis quick actions */}
+      <div className="max-w-2xl w-full">
+        <p className="text-sm text-[var(--color-foreground-muted)] mb-3 text-center">
+          Try asking for advanced analysis:
+        </p>
+        <div className="flex flex-wrap gap-2 justify-center">
+          {analysisSuggestions.map((item, index) => (
+            <button
+              key={index}
+              onClick={() => onSuggestionClick(item.title)}
+              className="px-3 py-2 text-sm bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg hover:border-[var(--color-brand-500)] hover:bg-[var(--color-surface-hover)] transition-all text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]"
+            >
+              <span className="mr-2">{item.icon}</span>
+              {item.title}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Analysis workspace link */}
+      <div className="mt-8 text-center">
+        <a
+          href="/analysis"
+          className="inline-flex items-center gap-2 text-sm text-[var(--color-brand-500)] hover:text-[var(--color-brand-400)] transition-colors"
+        >
+          <span>Or use the advanced Analysis Workspace</span>
+          <span>→</span>
+        </a>
+      </div>
     </div>
+  );
+};
+
+// =============================================================================
+// CONNECTION STATUS
+// =============================================================================
+
+interface ConnectionStatusProps {
+  isConnected: boolean;
+  onReconnect: () => void;
+}
+
+const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ isConnected, onReconnect }) => {
+  if (isConnected) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-[var(--color-success)]">
+        <span className="status-dot status-dot-online" />
+        <span>Connected</span>
+      </div>
+    );
+  }
+  
+  return (
+    <button
+      onClick={onReconnect}
+      className="flex items-center gap-2 text-sm text-[var(--color-warning)] hover:text-[var(--color-foreground)] transition-colors"
+    >
+      <span className="status-dot status-dot-busy" />
+      <span>Reconnect</span>
+      <RefreshCw className="w-3 h-3" />
+    </button>
   );
 };
 
@@ -464,22 +622,14 @@ const EmptyState: React.FC = () => {
 export const ChatInterface: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<ChatWebSocket | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  
-  // Store hooks
-  const {
-    messages,
-    isLoading,
-    isStreaming,
-    addMessage,
-    updateMessage,
-    setLoading,
-    setStreaming,
-    appendToLastMessage,
-    finalizeLastMessage,
-  } = useChatStore();
-  
-  const { currentSession, setCurrentSession } = useSessionStore();
+  const [conversationId, setConversationId] = useState<string | undefined>();
   
   // Scroll to bottom
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
@@ -502,127 +652,292 @@ export const ChatInterface: React.FC = () => {
     }
   }, []);
   
-  // Create session if needed
-  const ensureSession = useCallback(async (): Promise<string> => {
-    if (currentSession?.id) {
-      return currentSession.id;
+  // Initialize WebSocket connection
+  const connectWebSocket = useCallback(() => {
+    // Clean up existing connection
+    if (wsRef.current) {
+      wsRef.current.disconnect();
     }
     
-    try {
-      const response = await api.session.create();
-      setCurrentSession({
-        id: response.sessionId,
-        createdAt: response.createdAt,
-        lastActive: response.createdAt,
-        status: response.status,
+    const ws = new ChatWebSocket(
+      // On stream chunk
+      (chunk) => {
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage && lastMessage.role === 'assistant' && lastMessage.status === 'streaming') {
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, content: lastMessage.content + chunk }
+            ];
+          }
+          return prev;
+        });
+      },
+      // On complete
+      (response) => {
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage && lastMessage.role === 'assistant') {
+            // Parse visualizations from response
+            const visualizations: Array<{
+              type: 'chart' | 'dashboard' | 'table' | 'kpi';
+              data: any;
+              title?: string;
+              description?: string;
+            }> = [];
+
+            // Check for chart data
+            if (response.chart) {
+              visualizations.push({
+                type: 'chart',
+                data: response.chart,
+                title: response.chart_title,
+                description: response.chart_description
+              });
+            }
+
+            // Check for dashboard data
+            if (response.dashboard) {
+              visualizations.push({
+                type: 'dashboard',
+                data: response.dashboard
+              });
+            }
+
+            // Check for table data
+            if (response.table) {
+              visualizations.push({
+                type: 'table',
+                data: response.table,
+                title: response.table_title
+              });
+            }
+
+            // Check for KPI data
+            if (response.kpi) {
+              visualizations.push({
+                type: 'kpi',
+                data: response.kpi
+              });
+            }
+
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...lastMessage,
+                content: response.response || lastMessage.content,
+                status: 'complete',
+                sources: response.sources,
+                visualizations: visualizations.length > 0 ? visualizations : undefined,
+                executionTime: response.response_time,
+              }
+            ];
+          }
+          return prev;
+        });
+        setConversationId(response.conversation_id);
+        setIsLoading(false);
+      },
+      // On error
+      (error) => {
+        console.error('WebSocket error:', error);
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage && lastMessage.role === 'assistant' && lastMessage.status === 'streaming') {
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, status: 'error', error: error.message }
+            ];
+          }
+          return prev;
+        });
+        setIsLoading(false);
+        setIsConnected(false);
+      },
+      conversationId
+    );
+    
+    ws.connect()
+      .then(() => {
+        setIsConnected(true);
+        wsRef.current = ws;
+      })
+      .catch((err) => {
+        console.error('Failed to connect WebSocket:', err);
+        setIsConnected(false);
       });
-      return response.sessionId;
-    } catch (error) {
-      toast.error('Failed to create session', 'Please try again');
-      throw error;
-    }
-  }, [currentSession, setCurrentSession]);
+  }, [conversationId]);
+  
+  // Connect on mount
+  useEffect(() => {
+    connectWebSocket();
+    
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+      }
+    };
+  }, []);
   
   // Handle send message
   const handleSend = useCallback(async (content: string, file?: File) => {
     try {
-      setLoading(true);
+      setIsLoading(true);
       
-      // Ensure we have a session
-      const sessionId = await ensureSession();
-      
-      // Add user message
-      const userMessageId = `user-${Date.now()}`;
-      addMessage({
-        id: userMessageId,
-        role: 'user',
-        content: file ? `[Uploaded: ${file.name}]\n\n${content || 'Analyze this file'}` : content,
-        timestamp: new Date().toISOString(),
-        status: 'sent',
-      });
-      
-      // Upload file if provided
+      // Handle file upload first
       if (file) {
+        const userMessageId = `user-${Date.now()}`;
+        setMessages(prev => [...prev, {
+          id: userMessageId,
+          role: 'user',
+          content: `📎 Uploaded: ${file.name}`,
+          timestamp: new Date().toISOString(),
+          status: 'complete',
+        }]);
+        
         try {
-          const uploadResult = await api.session.uploadFile(sessionId, file);
-          
-          // Add assistant message for upload
-          addMessage({
+          const uploadResult = await api.document.upload(file);
+          setMessages(prev => [...prev, {
             id: `assistant-${Date.now()}`,
             role: 'assistant',
-            content: uploadResult.response,
+            content: `✅ Successfully uploaded "${file.name}". The document has been processed and added to the knowledge base. You can now ask questions about it!`,
             timestamp: new Date().toISOString(),
             status: 'complete',
-            charts: uploadResult.charts,
-            insights: uploadResult.insights,
-            executionTime: uploadResult.executionTime,
-          });
-        } catch (error) {
-          addMessage({
+          }]);
+        } catch (uploadError) {
+          setMessages(prev => [...prev, {
             id: `assistant-${Date.now()}`,
             role: 'assistant',
-            content: 'Failed to process the uploaded file. Please try again.',
+            content: 'Failed to upload the file. Please try again.',
             timestamp: new Date().toISOString(),
             status: 'error',
-            error: error instanceof Error ? error.message : 'Upload failed',
-          });
+            error: uploadError instanceof Error ? uploadError.message : 'Upload failed',
+          }]);
+          setIsLoading(false);
           return;
         }
       }
       
-      // Send query if there's content
+      // Send message if there's content
       if (content) {
-        // Add streaming assistant message
+        // Add user message
+        const userMessageId = `user-${Date.now()}`;
+        setMessages(prev => [...prev, {
+          id: userMessageId,
+          role: 'user',
+          content,
+          timestamp: new Date().toISOString(),
+          status: 'complete',
+        }]);
+        
+        // Add streaming assistant message placeholder
         const assistantMessageId = `assistant-${Date.now()}`;
-        addMessage({
+        setMessages(prev => [...prev, {
           id: assistantMessageId,
           role: 'assistant',
           content: '',
           timestamp: new Date().toISOString(),
           status: 'streaming',
-        });
+        }]);
         
-        setStreaming(true);
-        
-        try {
-          const result = await api.session.query(sessionId, content);
-          
-          // Update with result
-          updateMessage(assistantMessageId, {
-            content: result.response,
-            status: 'complete',
-            intent: result.intent,
-            charts: result.charts,
-            dashboard: result.dashboard,
-            insights: result.insights,
-            executionTime: result.executionTime,
-          });
-        } catch (error) {
-          updateMessage(assistantMessageId, {
-            content: 'Sorry, I encountered an error processing your request.',
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Query failed',
-          });
-        } finally {
-          setStreaming(false);
+        // Try WebSocket first, fallback to REST API
+        if (wsRef.current && wsRef.current.isConnected()) {
+          wsRef.current.send(content);
+        } else {
+          // Fallback to REST API (/api/chat)
+          try {
+            const response = await api.chat.send(content, conversationId);
+            setMessages(prev => {
+              const lastMessage = prev[prev.length - 1];
+              if (lastMessage && lastMessage.id === assistantMessageId) {
+                return [
+                  ...prev.slice(0, -1),
+                  {
+                    ...lastMessage,
+                    content: response.response,
+                    status: 'complete',
+                    sources: response.sources,
+                    executionTime: response.response_time,
+                  }
+                ];
+              }
+              return prev;
+            });
+            setConversationId(response.conversation_id);
+            setIsLoading(false);
+          } catch (error) {
+            setMessages(prev => {
+              const lastMessage = prev[prev.length - 1];
+              if (lastMessage && lastMessage.id === assistantMessageId) {
+                return [
+                  ...prev.slice(0, -1),
+                  {
+                    ...lastMessage,
+                    status: 'error',
+                    error: error instanceof Error ? error.message : 'Request failed',
+                  }
+                ];
+              }
+              return prev;
+            });
+            setIsLoading(false);
+          }
         }
+      } else {
+        setIsLoading(false);
       }
     } catch (error) {
-      console.error('Chat error:', error);
-      toast.error('Error', 'Failed to send message');
-    } finally {
-      setLoading(false);
+      console.error('Send error:', error);
+      setIsLoading(false);
     }
-  }, [
-    ensureSession,
-    addMessage,
-    updateMessage,
-    setLoading,
-    setStreaming,
-  ]);
+  }, [conversationId]);
   
+  // Handle suggestion click
+  const handleSuggestionClick = useCallback((query: string) => {
+    handleSend(query);
+  }, [handleSend]);
+
+  // Handle upload click from empty state
+  const handleUploadClick = useCallback(() => {
+    uploadInputRef.current?.click();
+  }, []);
+
+  // Handle file selected from empty state upload
+  const handleUploadFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleSend('', file);
+    }
+    e.target.value = '';
+  }, [handleSend]);
+
   return (
     <div className="flex flex-col h-full">
+      {/* Hidden file input for empty state upload */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        onChange={handleUploadFileSelect}
+        accept=".csv,.xlsx,.xls,.json,.pdf,.txt,.doc,.docx"
+        className="hidden"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] glass">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl glass-brand flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-[var(--color-brand-500)]" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-[var(--color-foreground)]">AI Assistant</h2>
+            <p className="text-sm text-[var(--color-foreground-muted)]">
+              Ask questions about your data in natural language
+            </p>
+          </div>
+        </div>
+        <ConnectionStatus isConnected={isConnected} onReconnect={connectWebSocket} />
+      </div>
+      
       {/* Messages area */}
       <div
         ref={messagesContainerRef}
@@ -630,7 +945,10 @@ export const ChatInterface: React.FC = () => {
         className="flex-1 overflow-y-auto scrollbar-thin"
       >
         {messages.length === 0 ? (
-          <EmptyState />
+          <EmptyState
+            onSuggestionClick={handleSuggestionClick}
+            onUploadClick={handleUploadClick}
+          />
         ) : (
           <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
             {messages.map((message, index) => (
@@ -646,26 +964,21 @@ export const ChatInterface: React.FC = () => {
       </div>
       
       {/* Scroll to bottom button */}
-      <AnimatePresence>
-        {showScrollButton && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            onClick={() => scrollToBottom()}
-            className="absolute bottom-32 right-8 p-2 bg-surface border border-border rounded-full shadow-lg hover:bg-surface-hover transition-colors"
-          >
-            <ArrowDown className="w-5 h-5 text-foreground" />
-          </motion.button>
-        )}
-      </AnimatePresence>
+      {showScrollButton && (
+        <button
+          onClick={() => scrollToBottom()}
+          className="absolute bottom-32 right-8 p-3 glass rounded-full shadow-lg hover:bg-[var(--color-surface-hover)] transition-colors animate-fade-in"
+        >
+          <ArrowDown className="w-5 h-5 text-[var(--color-foreground)]" />
+        </button>
+      )}
       
       {/* Input area */}
-      <div className="border-t border-border bg-background/80 backdrop-blur-sm">
+      <div className="border-t border-[var(--color-border)] glass">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <ChatInput
             onSend={handleSend}
-            isLoading={isLoading || isStreaming}
+            isLoading={isLoading}
           />
         </div>
       </div>

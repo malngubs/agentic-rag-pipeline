@@ -4,26 +4,23 @@
  * ============================================================================
  * 
  * Centralized API client for all backend communication.
- * Includes REST endpoints, WebSocket streaming, and file uploads.
+ * FIXED: Matches the actual backend endpoints from main_production_with_rag.py
+ * 
+ * Backend Endpoints:
+ * - POST /api/chat - Send chat message (RAG)
+ * - WS /ws/chat/stream - WebSocket streaming chat
+ * - GET /api/documents/list - List documents
+ * - POST /api/documents/upload - Upload document
+ * - GET /api/analytics/summary - Analytics data
+ * - GET /api/conversations - Get conversations
+ * - GET /health - Health check
  */
-
-import type {
-  ApiResponse,
-  Session,
-  CreateSessionResponse,
-  QueryResult,
-  DashboardData,
-  DataProfile,
-  ChartRecommendation,
-  ExportOptions,
-  ExportResult,
-  UploadedFile,
-} from '@/types';
 
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
 
+// Get API URL from environment or use default
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
@@ -83,7 +80,6 @@ async function get<T>(endpoint: string, params?: Record<string, string>): Promis
   const response = await fetch(url.toString(), {
     method: 'GET',
     headers: defaultHeaders,
-    credentials: 'include',
   });
   
   return handleResponse<T>(response);
@@ -93,29 +89,7 @@ async function post<T>(endpoint: string, data?: any): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: 'POST',
     headers: defaultHeaders,
-    credentials: 'include',
     body: data ? JSON.stringify(data) : undefined,
-  });
-  
-  return handleResponse<T>(response);
-}
-
-async function put<T>(endpoint: string, data?: any): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: 'PUT',
-    headers: defaultHeaders,
-    credentials: 'include',
-    body: data ? JSON.stringify(data) : undefined,
-  });
-  
-  return handleResponse<T>(response);
-}
-
-async function del<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: 'DELETE',
-    headers: defaultHeaders,
-    credentials: 'include',
   });
   
   return handleResponse<T>(response);
@@ -124,12 +98,20 @@ async function del<T>(endpoint: string): Promise<T> {
 async function uploadFile<T>(
   endpoint: string,
   file: File,
+  additionalData?: Record<string, string>,
   onProgress?: (progress: number) => void
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('file', file);
+    
+    // Add any additional form data
+    if (additionalData) {
+      Object.entries(additionalData).forEach(([key, value]) => {
+        formData.append(key, value);
+      });
+    }
     
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable && onProgress) {
@@ -155,184 +137,101 @@ async function uploadFile<T>(
     });
     
     xhr.open('POST', `${API_BASE_URL}${endpoint}`);
-    xhr.withCredentials = true;
     xhr.send(formData);
   });
 }
 
 // =============================================================================
-// SESSION API
+// CHAT API - Connects to /api/chat and /ws/chat/stream
 // =============================================================================
 
-export const sessionApi = {
-  /**
-   * Create a new analysis session
-   */
-  async create(userId?: string): Promise<CreateSessionResponse> {
-    return post<CreateSessionResponse>('/api/sessions', { userId });
-  },
-  
-  /**
-   * Get session by ID
-   */
-  async get(sessionId: string): Promise<Session> {
-    return get<Session>(`/api/sessions/${sessionId}`);
-  },
-  
-  /**
-   * List all sessions
-   */
-  async list(): Promise<Session[]> {
-    return get<Session[]>('/api/sessions');
-  },
-  
-  /**
-   * Close a session
-   */
-  async close(sessionId: string): Promise<void> {
-    return del(`/api/sessions/${sessionId}`);
-  },
-  
-  /**
-   * Upload a file to a session
-   */
-  async uploadFile(
-    sessionId: string,
-    file: File,
-    onProgress?: (progress: number) => void
-  ): Promise<QueryResult> {
-    return uploadFile<QueryResult>(
-      `/api/sessions/${sessionId}/upload`,
-      file,
-      onProgress
-    );
-  },
-  
-  /**
-   * Send a natural language query
-   */
-  async query(sessionId: string, query: string): Promise<QueryResult> {
-    return post<QueryResult>(`/api/sessions/${sessionId}/query`, { query });
-  },
-  
-  /**
-   * Get data profile for session
-   */
-  async getProfile(sessionId: string): Promise<DataProfile> {
-    return get<DataProfile>(`/api/sessions/${sessionId}/profile`);
-  },
-  
-  /**
-   * Get chart recommendations
-   */
-  async getChartRecommendations(
-    sessionId: string,
-    question?: string
-  ): Promise<ChartRecommendation[]> {
-    return post<ChartRecommendation[]>(
-      `/api/sessions/${sessionId}/recommend-charts`,
-      { question }
-    );
-  },
-};
+export interface ChatRequest {
+  message: string;
+  conversation_id?: string;
+  include_sources?: boolean;
+}
 
-// =============================================================================
-// DASHBOARD API
-// =============================================================================
+export interface ChatResponse {
+  response: string;
+  conversation_id: string;
+  sources?: Array<{
+    document_name: string;
+    chunk_text: string;
+    similarity_score: number;
+  }>;
+  model: string;
+  tokens_used?: number;
+  response_time?: number;
+  // Visualization fields from data analyst backend
+  chart?: any; // Plotly chart data
+  chart_title?: string;
+  chart_description?: string;
+  dashboard?: any; // Dashboard configuration with KPIs and charts
+  table?: any; // Table data
+  table_title?: string;
+  kpi?: any; // KPI data
+}
 
-export const dashboardApi = {
+export const chatApi = {
   /**
-   * Create a new dashboard
+   * Send a chat message via REST API
+   * Endpoint: POST /api/chat
    */
-  async create(
-    sessionId: string,
-    title: string,
-    template?: string
-  ): Promise<DashboardData> {
-    return post<DashboardData>('/api/dashboards', {
-      sessionId,
-      title,
-      template,
+  async send(message: string, conversationId?: string): Promise<ChatResponse> {
+    return post<ChatResponse>('/api/chat', {
+      message,
+      conversation_id: conversationId,
+      include_sources: true,
     });
   },
-  
+
   /**
-   * Get dashboard by ID
+   * Get RAG system status
+   * Endpoint: GET /api/rag/status
    */
-  async get(dashboardId: string): Promise<DashboardData> {
-    return get<DashboardData>(`/api/dashboards/${dashboardId}`);
-  },
-  
-  /**
-   * List all dashboards
-   */
-  async list(): Promise<DashboardData[]> {
-    return get<DashboardData[]>('/api/dashboards');
-  },
-  
-  /**
-   * Update a dashboard
-   */
-  async update(
-    dashboardId: string,
-    updates: Partial<DashboardData>
-  ): Promise<DashboardData> {
-    return put<DashboardData>(`/api/dashboards/${dashboardId}`, updates);
-  },
-  
-  /**
-   * Delete a dashboard
-   */
-  async delete(dashboardId: string): Promise<void> {
-    return del(`/api/dashboards/${dashboardId}`);
-  },
-  
-  /**
-   * Export a dashboard
-   */
-  async export(
-    dashboardId: string,
-    options: ExportOptions
-  ): Promise<ExportResult> {
-    return post<ExportResult>(`/api/dashboards/${dashboardId}/export`, options);
+  async getStatus(): Promise<any> {
+    return get('/api/rag/status');
   },
 };
 
 // =============================================================================
-// STREAMING API (WebSocket)
+// WEBSOCKET STREAMING CHAT
 // =============================================================================
 
-type StreamingCallback = (content: string) => void;
-type CompleteCallback = (result: QueryResult) => void;
+type StreamCallback = (chunk: string) => void;
+type CompleteCallback = (response: ChatResponse) => void;
 type ErrorCallback = (error: Error) => void;
 
 export class ChatWebSocket {
   private ws: WebSocket | null = null;
-  private sessionId: string;
-  private onStream: StreamingCallback;
+  private onStream: StreamCallback;
   private onComplete: CompleteCallback;
   private onError: ErrorCallback;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
+  private conversationId?: string;
   
   constructor(
-    sessionId: string,
-    onStream: StreamingCallback,
+    onStream: StreamCallback,
     onComplete: CompleteCallback,
-    onError: ErrorCallback
+    onError: ErrorCallback,
+    conversationId?: string
   ) {
-    this.sessionId = sessionId;
     this.onStream = onStream;
     this.onComplete = onComplete;
     this.onError = onError;
+    this.conversationId = conversationId;
   }
   
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(`${WS_BASE_URL}/ws/chat/${this.sessionId}`);
+        // Connect to the streaming WebSocket endpoint
+        const wsUrl = `${WS_BASE_URL}/ws/chat/stream`;
+        this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
+          console.log('✅ WebSocket connected to backend');
           this.reconnectAttempts = 0;
           resolve();
         };
@@ -340,31 +239,75 @@ export class ChatWebSocket {
         this.ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            
-            switch (data.type) {
-              case 'stream':
-                this.onStream(data.content);
-                break;
-              case 'complete':
-                this.onComplete(data.result);
-                break;
-              case 'error':
-                this.onError(new Error(data.message));
-                break;
+
+            // Handle different message types from the backend
+            // Backend sends: stream_token, stream_complete, thinking, system, error, response
+            if (data.type === 'stream_token' || data.type === 'chunk' || data.type === 'stream') {
+              // Streaming chunk - backend sends 'token' field
+              this.onStream(data.token || data.content || data.chunk || '');
+            } else if (data.type === 'stream_complete' || data.type === 'complete' || data.type === 'done') {
+              // Streaming complete
+              this.onComplete({
+                response: data.response || data.full_response || '',
+                conversation_id: data.conversation_id || this.conversationId || '',
+                sources: data.sources,
+                model: data.model || 'gpt-4o-mini',
+                tokens_used: data.tokens_used,
+                response_time: data.response_time,
+                // Pass through visualization data
+                chart: data.chart,
+                chart_title: data.chart_title,
+                chart_description: data.chart_description,
+                dashboard: data.dashboard,
+                table: data.table,
+                table_title: data.table_title,
+                kpi: data.kpi,
+              });
+            } else if (data.type === 'thinking') {
+              // Backend is processing - ignore or show typing indicator
+              console.log('Backend thinking...');
+            } else if (data.type === 'system') {
+              // System message (e.g., welcome message)
+              console.log('System:', data.message);
+            } else if (data.type === 'error') {
+              this.onError(new Error(data.message || 'Unknown error'));
+            } else if (data.type === 'response') {
+              // Non-streaming response from /ws/chat endpoint
+              this.onComplete({
+                response: data.response || data.message || '',
+                conversation_id: data.conversation_id || '',
+                sources: data.sources,
+                model: data.model || 'gpt-4o-mini',
+                response_time: data.response_time,
+              });
+            } else if (data.response) {
+              // Direct response (non-streaming fallback)
+              this.onComplete({
+                response: data.response,
+                conversation_id: data.conversation_id || '',
+                sources: data.sources,
+                model: data.model || 'gpt-4o-mini',
+              });
+            } else if (typeof data === 'string') {
+              // Plain text chunk
+              this.onStream(data);
             }
           } catch (e) {
-            // Raw text stream
+            // Raw text stream (not JSON)
             this.onStream(event.data);
           }
         };
         
         this.ws.onerror = (event) => {
-          this.onError(new Error('WebSocket error'));
+          console.error('❌ WebSocket error:', event);
+          this.onError(new Error('WebSocket connection error'));
         };
         
         this.ws.onclose = (event) => {
+          console.log('🔌 WebSocket closed:', event.code, event.reason);
           if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
+            console.log(`🔄 Reconnecting... attempt ${this.reconnectAttempts}`);
             setTimeout(() => this.connect(), 1000 * this.reconnectAttempts);
           }
         };
@@ -374,9 +317,16 @@ export class ChatWebSocket {
     });
   }
   
-  send(query: string): void {
+  send(message: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'query', content: query }));
+      // IMPORTANT: Backend expects type: "chat" to process the message
+      const payload = {
+        type: "chat",
+        message,
+        conversation_id: this.conversationId,
+        include_sources: true,
+      };
+      this.ws.send(JSON.stringify(payload));
     } else {
       this.onError(new Error('WebSocket not connected'));
     }
@@ -395,62 +345,778 @@ export class ChatWebSocket {
 }
 
 // =============================================================================
-// EXPORT API
+// DOCUMENT API - Connects to /api/documents/*
 // =============================================================================
 
-export const exportApi = {
+export interface Document {
+  id: string;
+  name: string;
+  file_type: string;
+  size: number;
+  chunks: number;
+  uploaded_at: string;
+  status: string;
+}
+
+export interface DocumentListResponse {
+  documents: Document[];
+  total: number;
+}
+
+export const documentApi = {
   /**
-   * Export chart to image
+   * List all documents
+   * Endpoint: GET /api/documents/list
    */
-  async chartToImage(chartId: string, format: 'png' | 'svg' = 'png'): Promise<Blob> {
-    const response = await fetch(`${API_BASE_URL}/api/export/chart/${chartId}`, {
-      method: 'POST',
+  async list(): Promise<DocumentListResponse> {
+    return get<DocumentListResponse>('/api/documents/list');
+  },
+
+  /**
+   * Upload a document
+   * Endpoint: POST /api/upload (backend uses /api/upload, not /api/documents/upload)
+   */
+  async upload(
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<any> {
+    return uploadFile('/api/upload', file, undefined, onProgress);
+  },
+
+  /**
+   * Delete a document
+   * Endpoint: DELETE /api/documents/{document_id}
+   */
+  async delete(documentId: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+      method: 'DELETE',
       headers: defaultHeaders,
-      credentials: 'include',
-      body: JSON.stringify({ format }),
     });
     
     if (!response.ok) {
-      throw new ApiError(response.status, 'Export failed');
+      throw new ApiError(response.status, 'Failed to delete document');
     }
-    
-    return response.blob();
   },
-  
+};
+
+// =============================================================================
+// ANALYTICS API - Connects to /api/analytics/*
+// =============================================================================
+
+export interface AnalyticsSummary {
+  total_queries: number;
+  total_documents: number;
+  total_chunks: number;
+  total_conversations: number;
+  avg_response_time: number;
+  total_tokens_used: number;
+  total_cost: number;
+  queries_today: number;
+  queries_this_week: number;
+  queries_this_month: number;
+}
+
+export interface BudgetAlert {
+  status: string;
+  daily_used: number;
+  daily_budget: number;
+  daily_percentage: number;
+  monthly_used: number;
+  monthly_budget: number;
+  monthly_percentage: number;
+  alerts: string[];
+}
+
+export const analyticsApi = {
   /**
-   * Export data to CSV/Excel
+   * Get analytics summary
+   * Endpoint: GET /api/analytics/summary
    */
-  async dataToFile(
+  async getSummary(): Promise<AnalyticsSummary> {
+    return get<AnalyticsSummary>('/api/analytics/summary');
+  },
+
+  /**
+   * Get budget alerts
+   * Endpoint: GET /api/analytics/budget-alert
+   */
+  async getBudgetAlert(dailyBudget = 10, monthlyBudget = 300): Promise<BudgetAlert> {
+    return get<BudgetAlert>('/api/analytics/budget-alert', {
+      daily_budget: String(dailyBudget),
+      monthly_budget: String(monthlyBudget),
+    });
+  },
+
+  /**
+   * Get query history
+   * Endpoint: GET /api/analytics/queries
+   */
+  async getQueryHistory(limit = 50): Promise<any[]> {
+    return get('/api/analytics/queries', { limit: String(limit) });
+  },
+};
+
+// =============================================================================
+// CONVERSATION API - Connects to /api/conversations
+// =============================================================================
+
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export const conversationApi = {
+  /**
+   * List all conversations
+   * Endpoint: GET /api/conversations
+   */
+  async list(): Promise<Conversation[]> {
+    return get<Conversation[]>('/api/conversations');
+  },
+
+  /**
+   * Get conversation by ID
+   * Endpoint: GET /api/conversations/{id}
+   */
+  async get(conversationId: string): Promise<any> {
+    return get(`/api/conversations/${conversationId}`);
+  },
+
+  /**
+   * Get messages in a conversation
+   * Endpoint: GET /api/conversations/{id}/messages
+   */
+  async getMessages(conversationId: string): Promise<any[]> {
+    return get(`/api/conversations/${conversationId}/messages`);
+  },
+};
+
+// =============================================================================
+// SESSION API - For Data Analyst features
+// =============================================================================
+
+export interface DataProfile {
+  columns: Array<{
+    name: string;
+    type: string;
+    semantic_type: string;
+    missing_count: number;
+    missing_percentage: number;
+    unique_count: number;
+    sample_values: any[];
+    statistics?: {
+      min?: number;
+      max?: number;
+      mean?: number;
+      median?: number;
+      std?: number;
+      q1?: number;
+      q3?: number;
+    };
+  }>;
+  row_count: number;
+  column_count: number;
+  quality_score: number;
+  quality_level: string;
+  summary: string;
+}
+
+export interface ForecastResult {
+  method: string;
+  forecast_values: number[];
+  forecast_dates: string[];
+  confidence_lower: number[];
+  confidence_upper: number[];
+  confidence_level: number;
+  metrics: {
+    mae: number;
+    rmse: number;
+    mape: number;
+  };
+  trend_direction: string;
+  seasonality_detected: boolean;
+}
+
+export interface StatisticalResult {
+  test_type: string;
+  test_statistic: number;
+  p_value: number;
+  significant: boolean;
+  interpretation: string;
+  effect_size?: number;
+  confidence_interval?: [number, number];
+  additional_info?: Record<string, any>;
+}
+
+export interface InsightResult {
+  type: string;
+  priority: string;
+  category: string;
+  title: string;
+  description: string;
+  metric?: string;
+  value?: number;
+  change?: number;
+  recommendation?: string;
+}
+
+export interface AnalysisSession {
+  id: string;
+  created_at: string;
+  data_loaded: boolean;
+  file_name?: string;
+  row_count?: number;
+  column_count?: number;
+}
+
+export const sessionApi = {
+  /**
+   * Create a new analysis session
+   * Endpoint: POST /api/sessions
+   */
+  async create(userId?: string): Promise<AnalysisSession> {
+    return post('/api/sessions', { user_id: userId });
+  },
+
+  /**
+   * Get session info
+   * Endpoint: GET /api/sessions/{id}
+   */
+  async get(sessionId: string): Promise<AnalysisSession> {
+    return get(`/api/sessions/${sessionId}`);
+  },
+
+  /**
+   * Upload file to session
+   * Endpoint: POST /api/sessions/{id}/upload
+   */
+  async uploadFile(
     sessionId: string,
-    format: 'csv' | 'xlsx' = 'csv'
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<{ success: boolean; file_name: string; rows: number; columns: number }> {
+    return uploadFile(`/api/sessions/${sessionId}/upload`, file, undefined, onProgress);
+  },
+
+  /**
+   * Get data profile for session
+   * Endpoint: GET /api/sessions/{id}/profile
+   */
+  async getProfile(sessionId: string): Promise<DataProfile> {
+    return get(`/api/sessions/${sessionId}/profile`);
+  },
+
+  /**
+   * Get data preview (first N rows)
+   * Endpoint: GET /api/sessions/{id}/preview
+   */
+  async getPreview(sessionId: string, limit = 100): Promise<{ columns: string[]; data: any[][] }> {
+    return get(`/api/sessions/${sessionId}/preview`, { limit: String(limit) });
+  },
+
+  /**
+   * Run forecast on a column
+   * Endpoint: POST /api/sessions/{id}/forecast
+   */
+  async forecast(
+    sessionId: string,
+    column: string,
+    periods: number,
+    method?: string
+  ): Promise<ForecastResult> {
+    return post(`/api/sessions/${sessionId}/forecast`, {
+      column,
+      periods,
+      method: method || 'auto',
+    });
+  },
+
+  /**
+   * Run statistical analysis
+   * Endpoint: POST /api/sessions/{id}/statistics
+   */
+  async runStatistics(
+    sessionId: string,
+    testType: string,
+    columns: string[],
+    options?: Record<string, any>
+  ): Promise<StatisticalResult> {
+    return post(`/api/sessions/${sessionId}/statistics`, {
+      test_type: testType,
+      columns,
+      ...options,
+    });
+  },
+
+  /**
+   * Get AI-generated insights
+   * Endpoint: GET /api/sessions/{id}/insights
+   */
+  async getInsights(sessionId: string): Promise<InsightResult[]> {
+    return get(`/api/sessions/${sessionId}/insights`);
+  },
+
+  /**
+   * Get chart recommendations
+   * Endpoint: POST /api/sessions/{id}/recommend-charts
+   */
+  async recommendCharts(
+    sessionId: string,
+    columns?: string[]
+  ): Promise<Array<{ chart_type: string; score: number; explanation: string }>> {
+    return post(`/api/sessions/${sessionId}/recommend-charts`, { columns });
+  },
+
+  /**
+   * Generate a chart
+   * Endpoint: POST /api/sessions/{id}/chart
+   */
+  async generateChart(
+    sessionId: string,
+    chartType: string,
+    columns: string[],
+    options?: Record<string, any>
+  ): Promise<{ chart_data: any; chart_config: any }> {
+    return post(`/api/sessions/${sessionId}/chart`, {
+      chart_type: chartType,
+      columns,
+      ...options,
+    });
+  },
+
+  /**
+   * Send query to session (natural language)
+   * Endpoint: POST /api/sessions/{id}/query
+   */
+  async query(sessionId: string, query: string): Promise<any> {
+    return post(`/api/sessions/${sessionId}/query`, { query });
+  },
+
+  /**
+   * Export data/analysis results
+   * Endpoint: POST /api/sessions/{id}/export
+   */
+  async export(
+    sessionId: string,
+    format: 'csv' | 'excel' | 'json' | 'pdf'
   ): Promise<Blob> {
-    const response = await fetch(
-      `${API_BASE_URL}/api/export/data/${sessionId}?format=${format}`,
-      {
-        method: 'GET',
-        credentials: 'include',
-      }
-    );
-    
+    const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/export`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify({ format }),
+    });
     if (!response.ok) {
       throw new ApiError(response.status, 'Export failed');
     }
-    
     return response.blob();
   },
-  
+};
+
+// Need to expose API_BASE_URL for the export function
+const API_BASE_URL_EXPORT = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+// =============================================================================
+// REPORTS & ALERTS API - Tier 2 Feature
+// =============================================================================
+
+export interface ScheduledReport {
+  id: string;
+  name: string;
+  description: string;
+  frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  next_run: string;
+  last_run?: string;
+  recipients: string[];
+  metrics: string[];
+  format: 'pdf' | 'excel' | 'html';
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Alert {
+  id: string;
+  name: string;
+  metric: string;
+  operator: 'greater_than' | 'less_than' | 'equals' | 'change_by' | 'change_by_percent';
+  threshold: number;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  channels: ('email' | 'slack' | 'teams' | 'webhook')[];
+  recipients: string[];
+  is_active: boolean;
+  last_triggered?: string;
+  trigger_count: number;
+  created_at: string;
+}
+
+export interface AlertHistory {
+  id: string;
+  alert_id: string;
+  alert_name: string;
+  triggered_at: string;
+  value: number;
+  threshold: number;
+  status: 'triggered' | 'resolved' | 'acknowledged';
+  message: string;
+}
+
+export const reportsApi = {
   /**
-   * Download a blob as file
+   * List all scheduled reports
    */
-  downloadBlob(blob: Blob, filename: string): void {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  async listReports(): Promise<ScheduledReport[]> {
+    return get('/api/reports');
+  },
+
+  /**
+   * Create a new scheduled report
+   */
+  async createReport(report: Partial<ScheduledReport>): Promise<ScheduledReport> {
+    return post('/api/reports', report);
+  },
+
+  /**
+   * Update a scheduled report
+   */
+  async updateReport(id: string, report: Partial<ScheduledReport>): Promise<ScheduledReport> {
+    return post(`/api/reports/${id}`, report);
+  },
+
+  /**
+   * Delete a scheduled report
+   */
+  async deleteReport(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/reports/${id}`, {
+      method: 'DELETE',
+      headers: defaultHeaders,
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, 'Failed to delete report');
+    }
+  },
+
+  /**
+   * Run a report immediately
+   */
+  async runReport(id: string): Promise<{ success: boolean; message: string }> {
+    return post(`/api/reports/${id}/run`, {});
+  },
+
+  /**
+   * List all alerts
+   */
+  async listAlerts(): Promise<Alert[]> {
+    return get('/api/alerts');
+  },
+
+  /**
+   * Create a new alert
+   */
+  async createAlert(alert: Partial<Alert>): Promise<Alert> {
+    return post('/api/alerts', alert);
+  },
+
+  /**
+   * Update an alert
+   */
+  async updateAlert(id: string, alert: Partial<Alert>): Promise<Alert> {
+    return post(`/api/alerts/${id}`, alert);
+  },
+
+  /**
+   * Delete an alert
+   */
+  async deleteAlert(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/alerts/${id}`, {
+      method: 'DELETE',
+      headers: defaultHeaders,
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, 'Failed to delete alert');
+    }
+  },
+
+  /**
+   * Get alert history
+   */
+  async getAlertHistory(limit = 50): Promise<AlertHistory[]> {
+    return get('/api/alerts/history', { limit: String(limit) });
+  },
+
+  /**
+   * Acknowledge an alert
+   */
+  async acknowledgeAlert(historyId: string): Promise<AlertHistory> {
+    return post(`/api/alerts/history/${historyId}/acknowledge`, {});
+  },
+};
+
+// =============================================================================
+// COLLABORATION API - Tier 2 Feature
+// =============================================================================
+
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  member_count: number;
+  resource_count: number;
+  created_at: string;
+  is_default: boolean;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  name: string;
+  email: string;
+  avatar?: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+  is_online: boolean;
+  last_active?: string;
+}
+
+export interface SharedResource {
+  id: string;
+  name: string;
+  type: 'dashboard' | 'analysis' | 'report' | 'query';
+  description: string;
+  visibility: 'private' | 'team' | 'organization' | 'public';
+  owner_id: string;
+  workspace_id: string;
+  created_at: string;
+  updated_at: string;
+  view_count: number;
+  like_count: number;
+  comment_count: number;
+}
+
+export interface Comment {
+  id: string;
+  resource_id: string;
+  author_id: string;
+  content: string;
+  mentions: string[];
+  created_at: string;
+  reply_count: number;
+  like_count: number;
+}
+
+export const collaborationApi = {
+  /**
+   * List all workspaces
+   */
+  async listWorkspaces(): Promise<Workspace[]> {
+    return get('/api/workspaces');
+  },
+
+  /**
+   * Create a new workspace
+   */
+  async createWorkspace(workspace: Partial<Workspace>): Promise<Workspace> {
+    return post('/api/workspaces', workspace);
+  },
+
+  /**
+   * Get workspace members
+   */
+  async getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
+    return get(`/api/workspaces/${workspaceId}/members`);
+  },
+
+  /**
+   * Add member to workspace
+   */
+  async addWorkspaceMember(
+    workspaceId: string,
+    email: string,
+    role: WorkspaceMember['role']
+  ): Promise<WorkspaceMember> {
+    return post(`/api/workspaces/${workspaceId}/members`, { email, role });
+  },
+
+  /**
+   * List shared resources in a workspace
+   */
+  async listResources(workspaceId: string): Promise<SharedResource[]> {
+    return get(`/api/workspaces/${workspaceId}/resources`);
+  },
+
+  /**
+   * Share a resource
+   */
+  async shareResource(
+    resourceId: string,
+    visibility: SharedResource['visibility'],
+    sharedWith?: string[]
+  ): Promise<SharedResource> {
+    return post(`/api/resources/${resourceId}/share`, { visibility, shared_with: sharedWith });
+  },
+
+  /**
+   * Get resource comments
+   */
+  async getComments(resourceId: string): Promise<Comment[]> {
+    return get(`/api/resources/${resourceId}/comments`);
+  },
+
+  /**
+   * Add comment to resource
+   */
+  async addComment(resourceId: string, content: string, mentions?: string[]): Promise<Comment> {
+    return post(`/api/resources/${resourceId}/comments`, { content, mentions });
+  },
+
+  /**
+   * Get activity feed
+   */
+  async getActivityFeed(workspaceId?: string, limit = 50): Promise<any[]> {
+    const params: Record<string, string> = { limit: String(limit) };
+    if (workspaceId) params.workspace_id = workspaceId;
+    return get('/api/activity', params);
+  },
+};
+
+// =============================================================================
+// DATA TRANSFORMATION API - Tier 2 Feature
+// =============================================================================
+
+export interface TransformationStep {
+  id: string;
+  type: string;
+  column?: string;
+  config: Record<string, any>;
+  description: string;
+  is_enabled: boolean;
+}
+
+export interface TransformationPipeline {
+  id: string;
+  name: string;
+  session_id: string;
+  steps: TransformationStep[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DataQualityIssue {
+  column: string;
+  type: 'missing' | 'duplicate' | 'outlier' | 'invalid' | 'inconsistent';
+  severity: 'low' | 'medium' | 'high';
+  count: number;
+  description: string;
+  suggestion: string;
+}
+
+export const transformApi = {
+  /**
+   * Get data quality issues for a session
+   */
+  async getQualityIssues(sessionId: string): Promise<DataQualityIssue[]> {
+    return get(`/api/sessions/${sessionId}/quality`);
+  },
+
+  /**
+   * Apply transformation to session data
+   */
+  async applyTransformation(
+    sessionId: string,
+    step: Partial<TransformationStep>
+  ): Promise<{ success: boolean; preview: any }> {
+    return post(`/api/sessions/${sessionId}/transform`, step);
+  },
+
+  /**
+   * Apply multiple transformations (pipeline)
+   */
+  async applyPipeline(
+    sessionId: string,
+    steps: Partial<TransformationStep>[]
+  ): Promise<{ success: boolean; row_count: number; column_count: number }> {
+    return post(`/api/sessions/${sessionId}/transform/pipeline`, { steps });
+  },
+
+  /**
+   * Get transformation preview
+   */
+  async getPreview(
+    sessionId: string,
+    step: Partial<TransformationStep>
+  ): Promise<{ before: any[]; after: any[] }> {
+    return post(`/api/sessions/${sessionId}/transform/preview`, step);
+  },
+
+  /**
+   * Save transformation pipeline
+   */
+  async savePipeline(
+    sessionId: string,
+    name: string,
+    steps: Partial<TransformationStep>[]
+  ): Promise<TransformationPipeline> {
+    return post(`/api/sessions/${sessionId}/pipelines`, { name, steps });
+  },
+
+  /**
+   * List saved pipelines
+   */
+  async listPipelines(sessionId: string): Promise<TransformationPipeline[]> {
+    return get(`/api/sessions/${sessionId}/pipelines`);
+  },
+
+  /**
+   * Auto-fix quality issues
+   */
+  async autoFix(
+    sessionId: string,
+    issues: DataQualityIssue[]
+  ): Promise<{ success: boolean; fixed_count: number }> {
+    return post(`/api/sessions/${sessionId}/quality/autofix`, { issues });
+  },
+};
+
+// =============================================================================
+// NATURAL LANGUAGE QUERY API - Tier 2 Feature
+// =============================================================================
+
+export interface NLQueryResult {
+  natural_query: string;
+  generated_sql: string;
+  explanation: string;
+  columns: string[];
+  data: any[][];
+  row_count: number;
+  execution_time: number;
+}
+
+export const nlQueryApi = {
+  /**
+   * Convert natural language to SQL
+   */
+  async generateSql(
+    sessionId: string,
+    query: string
+  ): Promise<{ sql: string; explanation: string }> {
+    return post(`/api/sessions/${sessionId}/nl-to-sql`, { query });
+  },
+
+  /**
+   * Execute generated SQL
+   */
+  async executeSql(
+    sessionId: string,
+    sql: string
+  ): Promise<NLQueryResult> {
+    return post(`/api/sessions/${sessionId}/execute-sql`, { sql });
+  },
+
+  /**
+   * Get query suggestions based on data
+   */
+  async getSuggestions(sessionId: string): Promise<string[]> {
+    return get(`/api/sessions/${sessionId}/query-suggestions`);
   },
 };
 
@@ -458,13 +1124,32 @@ export const exportApi = {
 // HEALTH CHECK
 // =============================================================================
 
+export interface HealthStatus {
+  status: string;
+  timestamp: number;
+  service: string;
+  version: string;
+  components: {
+    rag_system: { status: string; initialized: string };
+    vector_store: { status: string };
+    llm_service: { status: string; provider: string };
+    websocket: { status: string; connections: string };
+    conversations: { status: string; total: string };
+    analytics: { status: string };
+    citations: { status: string };
+    multi_tenant: { status: string };
+    document_scopes: { status: string };
+  };
+}
+
+export async function checkHealth(): Promise<HealthStatus> {
+  return get<HealthStatus>('/health');
+}
+
 export async function checkApiHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`, {
-      method: 'GET',
-      headers: defaultHeaders,
-    });
-    return response.ok;
+    const health = await checkHealth();
+    return health.status === 'healthy';
   } catch {
     return false;
   }
@@ -475,10 +1160,17 @@ export async function checkApiHealth(): Promise<boolean> {
 // =============================================================================
 
 export const api = {
+  chat: chatApi,
+  document: documentApi,
+  analytics: analyticsApi,
+  conversation: conversationApi,
   session: sessionApi,
-  dashboard: dashboardApi,
-  export: exportApi,
-  checkHealth: checkApiHealth,
+  reports: reportsApi,
+  collaboration: collaborationApi,
+  transform: transformApi,
+  nlQuery: nlQueryApi,
+  checkHealth,
+  checkApiHealth,
   ChatWebSocket,
 };
 

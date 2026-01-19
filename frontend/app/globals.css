@@ -3,8 +3,14 @@
  * 🎨 GLOBAL STYLES - MACROCOMM BI PLATFORM
  * ============================================================================
  * 
- * Premium dark theme with Macrocomm branding.
- * FIXED: Removed prose class dependency
+ * Premium glossy dark theme with Macrocomm branding.
+ * 
+ * FEATURES:
+ * - Glass morphism effects
+ * - Glossy buttons and cards
+ * - Smooth animations
+ * - Font stack matching the desktop chatbot
+ * - Dynamic theme color support (customizable by user)
  */
 
 @tailwind base;
@@ -12,48 +18,94 @@
 @tailwind utilities;
 
 /* =============================================================================
-   CSS VARIABLES
+   CSS VARIABLES - Theme colors can be overridden by ThemeProvider
    ============================================================================= */
 
 @layer base {
   :root {
-    /* Brand Colors */
-    --color-brand-50: #fff7ed;
-    --color-brand-100: #ffedd5;
-    --color-brand-200: #fed7aa;
-    --color-brand-300: #fdba74;
-    --color-brand-400: #fb923c;
-    --color-brand-500: #f97316;
-    --color-brand-600: #FF6E00; /* Macrocomm Orange */
-    --color-brand-700: #c2410c;
-    --color-brand-800: #9a3412;
-    --color-brand-900: #7c2d12;
-    
-    /* Background Colors (Dark Theme) */
+    /* =========================================
+       BRAND COLORS (Dynamic - overridden by ThemeProvider)
+       ========================================= */
+    --color-brand-50: #FFF7ED;
+    --color-brand-100: #FFEDD5;
+    --color-brand-200: #FED7AA;
+    --color-brand-300: #FDBA74;
+    --color-brand-400: #FB923C;
+    --color-brand-500: #FF923F;
+    --color-brand-600: #FF6E00; /* Macrocomm Orange - Primary */
+    --color-brand-700: #E65100;
+    --color-brand-800: #C2410C;
+    --color-brand-900: #9A3412;
+    --color-brand-950: #7C2D12;
+
+    /* RGB values for rgba() usage (dynamically updated by ThemeProvider) */
+    --color-brand-rgb: 255, 110, 0;
+    --color-brand-500-rgb: 255, 146, 63;
+
+    /* =========================================
+       BACKGROUND COLORS (Premium Dark Theme)
+       ========================================= */
     --color-background: #0A0F1C;
     --color-background-secondary: #0D1221;
     
-    /* Surface Colors */
+    /* =========================================
+       SURFACE COLORS (For cards, modals, etc.)
+       ========================================= */
     --color-surface: #1A1F2E;
     --color-surface-hover: #242938;
     --color-surface-active: #2E3344;
     --color-surface-muted: #141824;
+    --color-surface-elevated: #1E2433;
     
-    /* Foreground Colors */
+    /* =========================================
+       FOREGROUND COLORS (Text)
+       ========================================= */
     --color-foreground: #F8FAFC;
     --color-foreground-muted: #94A3B8;
     --color-foreground-subtle: #64748B;
     
-    /* Border Colors */
+    /* =========================================
+       BORDER COLORS
+       ========================================= */
     --color-border: #2E3344;
     --color-border-hover: #3E4455;
     --color-border-focus: var(--color-brand-600);
     
-    /* Status Colors */
+    /* =========================================
+       STATUS COLORS
+       ========================================= */
     --color-success: #22C55E;
+    --color-success-muted: rgba(34, 197, 94, 0.1);
     --color-warning: #F59E0B;
+    --color-warning-muted: rgba(245, 158, 11, 0.1);
     --color-error: #EF4444;
+    --color-error-muted: rgba(239, 68, 68, 0.1);
     --color-info: #3B82F6;
+    --color-info-muted: rgba(59, 130, 246, 0.1);
+    
+    /* =========================================
+       SHADCN/UI COMPATIBILITY
+       ========================================= */
+    --background: var(--color-background);
+    --foreground: var(--color-foreground);
+    --card: var(--color-surface);
+    --card-foreground: var(--color-foreground);
+    --popover: var(--color-surface);
+    --popover-foreground: var(--color-foreground);
+    --primary: var(--color-brand-600);
+    --primary-foreground: #FFFFFF;
+    --secondary: var(--color-surface-hover);
+    --secondary-foreground: var(--color-foreground);
+    --muted: var(--color-surface-muted);
+    --muted-foreground: var(--color-foreground-muted);
+    --accent: var(--color-brand-500);
+    --accent-foreground: #FFFFFF;
+    --destructive: var(--color-error);
+    --destructive-foreground: #FFFFFF;
+    --border: var(--color-border);
+    --input: var(--color-border);
+    --ring: var(--color-brand-600);
+    --radius: 0.75rem;
   }
 }
 
@@ -63,32 +115,53 @@
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--color-border);
   }
   
   html {
-    @apply scroll-smooth;
+    scroll-behavior: smooth;
     font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   
   body {
-    @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    /* Font stack matching the desktop chatbot (Segoe UI on Windows) */
+    font-family: 
+      'Inter',
+      'Segoe UI',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Roboto',
+      'Helvetica Neue',
+      sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
   }
   
   /* Focus styles */
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-600 ring-offset-2 ring-offset-background;
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px var(--color-brand-600);
   }
   
   /* Selection */
   ::selection {
-    @apply bg-brand-600/30 text-foreground;
+    background-color: rgba(var(--color-brand-rgb), 0.3);
+    color: var(--color-foreground);
+  }
+  
+  /* Headings */
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.025em;
   }
 }
 
 /* =============================================================================
-   CUSTOM SCROLLBAR
+   SCROLLBAR STYLES
    ============================================================================= */
 
 @layer utilities {
@@ -128,16 +201,91 @@
 }
 
 /* =============================================================================
-   GLASS EFFECTS
+   GLASS MORPHISM & GLOSSY EFFECTS
    ============================================================================= */
 
 @layer utilities {
+  /* Glass effect - light */
   .glass {
-    @apply bg-surface/80 backdrop-blur-md border border-border;
+    background: rgba(26, 31, 46, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
   
+  /* Glass effect - strong */
   .glass-strong {
-    @apply bg-surface/90 backdrop-blur-xl border border-border;
+    background: rgba(26, 31, 46, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  
+  /* Glass effect - brand colored */
+  .glass-brand {
+    background: linear-gradient(
+      135deg,
+      rgba(var(--color-brand-rgb), 0.1) 0%,
+      rgba(26, 31, 46, 0.8) 100%
+    );
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(var(--color-brand-rgb), 0.2);
+  }
+  
+  /* Glossy card effect */
+  .glossy-card {
+    background: linear-gradient(
+      145deg,
+      rgba(30, 36, 51, 0.9) 0%,
+      rgba(26, 31, 46, 0.95) 50%,
+      rgba(20, 24, 36, 0.9) 100%
+    );
+    box-shadow: 
+      0 4px 24px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  /* Glossy button effect - uses theme color */
+  .glossy-button {
+    background: linear-gradient(
+      180deg,
+      var(--color-brand-500) 0%,
+      var(--color-brand-600) 50%,
+      var(--color-brand-700) 100%
+    );
+    box-shadow:
+      0 4px 12px rgba(var(--color-brand-rgb), 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+
+  .glossy-button:hover {
+    background: linear-gradient(
+      180deg,
+      var(--color-brand-400) 0%,
+      var(--color-brand-500) 50%,
+      var(--color-brand-600) 100%
+    );
+    box-shadow:
+      0 6px 20px rgba(var(--color-brand-rgb), 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .glossy-button:active {
+    background: linear-gradient(
+      180deg,
+      var(--color-brand-600) 0%,
+      var(--color-brand-700) 50%,
+      var(--color-brand-800) 100%
+    );
+    box-shadow:
+      0 2px 8px rgba(var(--color-brand-rgb), 0.2),
+      inset 0 1px 2px rgba(0, 0, 0, 0.2);
   }
 }
 
@@ -147,7 +295,30 @@
 
 @layer utilities {
   .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-500 to-brand-600;
+    background: linear-gradient(135deg, var(--color-brand-500) 0%, var(--color-brand-600) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  .gradient-text-shine {
+    background: linear-gradient(
+      90deg,
+      var(--color-brand-500) 0%,
+      var(--color-brand-300) 50%,
+      var(--color-brand-500) 100%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shine 3s linear infinite;
+  }
+  
+  @keyframes shine {
+    to {
+      background-position: 200% center;
+    }
   }
 }
 
@@ -158,6 +329,7 @@
 @layer utilities {
   .card-glow {
     position: relative;
+    transition: all 0.3s ease;
   }
   
   .card-glow::before {
@@ -169,8 +341,9 @@
     background: linear-gradient(
       135deg,
       var(--color-brand-600) 0%,
-      transparent 50%,
-      transparent 100%
+      transparent 40%,
+      transparent 60%,
+      var(--color-brand-600) 100%
     );
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -183,6 +356,11 @@
   .card-glow:hover::before {
     opacity: 1;
   }
+  
+  .card-glow:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(var(--color-brand-rgb), 0.15);
+  }
 }
 
 /* =============================================================================
@@ -193,6 +371,7 @@
   .shimmer {
     position: relative;
     overflow: hidden;
+    background: var(--color-surface-muted);
   }
   
   .shimmer::after {
@@ -202,9 +381,9 @@
     transform: translateX(-100%);
     background: linear-gradient(
       90deg,
-      transparent,
-      rgba(255, 255, 255, 0.05),
-      transparent
+      transparent 0%,
+      rgba(255, 255, 255, 0.03) 50%,
+      transparent 100%
     );
     animation: shimmer 2s infinite;
   }
@@ -217,16 +396,21 @@
 }
 
 /* =============================================================================
-   TYPING INDICATOR
+   TYPING INDICATOR (for chat)
    ============================================================================= */
 
 @layer components {
   .typing-indicator {
-    @apply flex items-center gap-1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
   
   .typing-indicator span {
-    @apply w-2 h-2 rounded-full bg-foreground-muted;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--color-foreground-muted);
     animation: typing 1.4s infinite ease-in-out both;
   }
   
@@ -256,26 +440,40 @@
 
 @layer components {
   .status-dot {
-    @apply w-2 h-2 rounded-full;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
   }
   
   .status-dot-online {
-    @apply bg-success;
+    background-color: var(--color-success);
     box-shadow: 0 0 8px var(--color-success);
+    animation: pulse-glow 2s ease-in-out infinite;
   }
   
   .status-dot-offline {
-    @apply bg-foreground-subtle;
+    background-color: var(--color-foreground-subtle);
   }
   
   .status-dot-busy {
-    @apply bg-warning;
+    background-color: var(--color-warning);
     box-shadow: 0 0 8px var(--color-warning);
   }
   
   .status-dot-error {
-    @apply bg-error;
+    background-color: var(--color-error);
     box-shadow: 0 0 8px var(--color-error);
+  }
+  
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 8px currentColor;
+    }
+    50% {
+      opacity: 0.7;
+      box-shadow: 0 0 12px currentColor;
+    }
   }
 }
 
@@ -285,21 +483,36 @@
 
 @layer components {
   .chat-message-user {
-    @apply bg-brand-600 text-white rounded-2xl rounded-br-md px-4 py-3;
+    background: linear-gradient(
+      135deg,
+      var(--color-brand-600) 0%,
+      var(--color-brand-700) 100%
+    );
+    color: white;
+    border-radius: 1rem;
+    border-bottom-right-radius: 0.25rem;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 2px 12px rgba(var(--color-brand-rgb), 0.2);
   }
   
   .chat-message-assistant {
-    @apply bg-surface border border-border rounded-2xl rounded-bl-md px-4 py-3;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+    border-bottom-left-radius: 0.25rem;
+    padding: 0.75rem 1rem;
   }
 }
 
 /* =============================================================================
-   MARKDOWN CONTENT STYLING - FIXED (no prose dependency)
+   MARKDOWN CONTENT STYLING (for chat responses)
    ============================================================================= */
 
 @layer components {
   .chat-content {
-    @apply text-sm leading-relaxed;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    color: var(--color-foreground);
   }
   
   .chat-content h1,
@@ -308,119 +521,133 @@
   .chat-content h4,
   .chat-content h5,
   .chat-content h6 {
-    @apply font-semibold text-foreground mt-4 mb-2;
+    font-weight: 600;
+    color: var(--color-foreground);
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
   }
   
-  .chat-content h1 { @apply text-xl; }
-  .chat-content h2 { @apply text-lg; }
-  .chat-content h3 { @apply text-base; }
+  .chat-content h1 { font-size: 1.5rem; }
+  .chat-content h2 { font-size: 1.25rem; }
+  .chat-content h3 { font-size: 1.125rem; }
   
   .chat-content p {
-    @apply mb-3 last:mb-0;
+    margin-bottom: 0.75rem;
+  }
+  
+  .chat-content p:last-child {
+    margin-bottom: 0;
   }
   
   .chat-content ul,
   .chat-content ol {
-    @apply pl-5 mb-3 space-y-1;
+    padding-left: 1.25rem;
+    margin-bottom: 0.75rem;
+    list-style-position: outside;
   }
   
   .chat-content ul {
-    @apply list-disc;
+    list-style-type: disc;
   }
   
   .chat-content ol {
-    @apply list-decimal;
+    list-style-type: decimal;
   }
   
   .chat-content li {
-    @apply text-foreground;
+    margin-bottom: 0.25rem;
   }
   
   .chat-content code {
-    @apply bg-surface-hover text-brand-400 px-1.5 py-0.5 rounded text-xs font-mono;
+    background-color: var(--color-surface-hover);
+    color: var(--color-brand-400);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-family: var(--font-mono), 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
   }
   
   .chat-content pre {
-    @apply bg-surface-muted border border-border rounded-lg p-4 overflow-x-auto mb-3;
+    background-color: var(--color-surface-muted);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 0.75rem 0;
   }
   
   .chat-content pre code {
-    @apply bg-transparent p-0 text-foreground;
+    background-color: transparent;
+    padding: 0;
+    color: var(--color-foreground);
+    font-size: 0.8125rem;
   }
   
   .chat-content blockquote {
-    @apply border-l-4 border-brand-600 pl-4 italic text-foreground-muted my-3;
+    border-left: 4px solid var(--color-brand-600);
+    padding-left: 1rem;
+    font-style: italic;
+    color: var(--color-foreground-muted);
+    margin: 0.75rem 0;
   }
   
   .chat-content a {
-    @apply text-brand-500 hover:text-brand-400 underline underline-offset-2;
+    color: var(--color-brand-500);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  
+  .chat-content a:hover {
+    color: var(--color-brand-400);
   }
   
   .chat-content table {
-    @apply w-full border-collapse mb-3;
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
   }
   
   .chat-content th,
   .chat-content td {
-    @apply border border-border px-3 py-2 text-left;
+    border: 1px solid var(--color-border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
   }
   
   .chat-content th {
-    @apply bg-surface-hover font-semibold;
+    background-color: var(--color-surface-hover);
+    font-weight: 600;
   }
   
   .chat-content hr {
-    @apply border-border my-4;
-  }
-  
-  .chat-content img {
-    @apply max-w-full h-auto rounded-lg;
+    border-color: var(--color-border);
+    margin: 1rem 0;
   }
 }
 
 /* =============================================================================
-   PLOTLY CHART OVERRIDES
+   INTERACTIVE CARD
    ============================================================================= */
 
 @layer components {
-  .plotly-chart .modebar {
-    @apply opacity-0 transition-opacity duration-200;
+  .card-interactive {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    transition: all 0.2s ease;
+    cursor: pointer;
   }
   
-  .plotly-chart:hover .modebar {
-    @apply opacity-100;
+  .card-interactive:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
   }
   
-  .plotly-chart .modebar-btn {
-    @apply text-foreground-muted hover:text-foreground;
-  }
-}
-
-/* =============================================================================
-   REACT GRID LAYOUT OVERRIDES
-   ============================================================================= */
-
-@layer components {
-  .react-grid-item {
-    @apply transition-all duration-200;
-  }
-  
-  .react-grid-item.react-grid-placeholder {
-    @apply bg-brand-600/20 border-2 border-dashed border-brand-600 rounded-xl;
-  }
-  
-  .react-grid-item > .react-resizable-handle {
-    @apply opacity-0 transition-opacity duration-200;
-  }
-  
-  .react-grid-item:hover > .react-resizable-handle {
-    @apply opacity-100;
-  }
-  
-  .react-resizable-handle-se {
-    @apply w-4 h-4 bottom-1 right-1 cursor-se-resize;
-    background: linear-gradient(135deg, transparent 50%, var(--color-brand-600) 50%);
-    border-radius: 0 0 4px 0;
+  .card-interactive:active {
+    transform: translateY(0);
   }
 }
 
@@ -430,45 +657,104 @@
 
 @layer components {
   .skeleton {
-    @apply bg-surface-hover rounded animate-pulse;
+    background: var(--color-surface-hover);
+    border-radius: 0.375rem;
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
   
   .skeleton-text {
-    @apply h-4 w-full skeleton;
+    height: 1rem;
+    width: 100%;
   }
   
   .skeleton-heading {
-    @apply h-6 w-3/4 skeleton;
+    height: 1.5rem;
+    width: 75%;
   }
   
   .skeleton-avatar {
-    @apply w-10 h-10 rounded-full skeleton;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
   }
   
   .skeleton-card {
-    @apply h-32 w-full skeleton rounded-xl;
+    height: 8rem;
+    width: 100%;
+    border-radius: 0.75rem;
+  }
+  
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
   }
 }
 
 /* =============================================================================
-   PRINT STYLES
+   ANIMATIONS
    ============================================================================= */
 
-@media print {
-  body {
-    @apply bg-white text-black;
+@layer utilities {
+  /* Fade in */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
   }
   
-  .no-print {
-    display: none !important;
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
   
-  .print-break-before {
-    page-break-before: always;
+  /* Slide in from bottom */
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
   }
   
-  .print-break-after {
-    page-break-after: always;
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  /* Blink cursor */
+  .animate-blink {
+    animation: blink 1s ease-in-out infinite;
+  }
+  
+  @keyframes blink {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+  
+  /* Spin */
+  .animate-spin-slow {
+    animation: spin 3s linear infinite;
+  }
+  
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 }
 
@@ -495,34 +781,49 @@
 }
 
 /* =============================================================================
-   UTILITY CLASSES
+   PRINT STYLES
    ============================================================================= */
 
-@layer utilities {
-  /* Text shadow for glow effect */
-  .text-glow {
-    text-shadow: 0 0 20px rgba(255, 110, 0, 0.5);
+@media print {
+  body {
+    background: white;
+    color: black;
   }
-  
-  /* Background utilities */
-  .bg-gradient-brand {
-    @apply bg-gradient-to-r from-brand-600 to-brand-500;
+
+  .no-print {
+    display: none !important;
   }
-  
-  .bg-gradient-dark {
-    @apply bg-gradient-to-br from-background via-surface to-background;
+}
+
+/* =============================================================================
+   ELECTRON FRAMELESS WINDOW SUPPORT
+   ============================================================================= */
+
+/* Make header draggable in Electron frameless window */
+.electron-drag {
+  -webkit-app-region: drag;
+}
+
+/* Buttons inside draggable area should be clickable */
+.electron-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Auto-apply drag to common header elements when in Electron */
+@media screen {
+  /* The sidebar header should be draggable */
+  .sidebar-header,
+  [data-electron-drag="true"] {
+    -webkit-app-region: drag;
   }
-  
-  /* Hide but keep accessible */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border-width: 0;
+
+  /* Buttons and interactive elements should not be draggable */
+  button,
+  a,
+  input,
+  textarea,
+  select,
+  [data-electron-drag="false"] {
+    -webkit-app-region: no-drag;
   }
 }
