@@ -18,6 +18,7 @@ class MacrocommBubbleChatbot {
             position: config.position || 'bottom-right',
             theme: config.theme || 'light',
             apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8001',
+            biPlatformUrl: config.biPlatformUrl || 'http://localhost:3000',
             primaryColor: config.primaryColor || '#FF6E00',
             secondaryColor: config.secondaryColor || '#FF923F',
             enableStreaming: config.enableStreaming !== false, // Default: true
@@ -1260,8 +1261,8 @@ class MacrocommBubbleChatbot {
     }
 
     openDashboard() {
-        // Open BI Platform in new tab
-        const biPlatformUrl = 'http://localhost:3000';
+        // Open BI Platform dashboards in new tab
+        const biPlatformUrl = `${this.config.biPlatformUrl}/dashboards`;
         window.open(biPlatformUrl, '_blank');
 
         // Optional: Show notification that dashboard is opening

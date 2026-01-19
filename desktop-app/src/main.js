@@ -349,8 +349,9 @@ function setupIPC() {
     // Open BI Platform dashboard
     ipcMain.on('open-dashboard', () => {
         const { shell } = require('electron');
-        shell.openExternal('http://localhost:3000');
-        console.log('📊 Opening BI Platform in browser');
+        const frontendUrl = store.get('frontendUrl');
+        shell.openExternal(`${frontendUrl}/dashboards`);
+        console.log('📊 Opening BI Platform in browser:', `${frontendUrl}/dashboards`);
     });
 
     // Show notification
