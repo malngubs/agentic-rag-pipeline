@@ -836,23 +836,52 @@ export default function TransformPage() {
   const handleApplyTransformations = useCallback(async () => {
     if (!session?.id) return;
 
+    const enabledSteps = steps.filter(s => s.isEnabled);
+    if (enabledSteps.length === 0) {
+      setError('No transformations to apply');
+      return;
+    }
+
     setIsApplying(true);
     setError(null);
 
     try {
-      // In a real implementation, this would send the transformation pipeline to the backend
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Send transformation pipeline to the backend
+      const result = await api.transform.applyPipeline(
+        session.id,
+        enabledSteps.map(step => ({
+          type: step.type,
+          column: step.column,
+          config: step.config,
+        }))
+      );
 
-      // Clear steps after applying
-      // setSteps([]);
+      if (result.success) {
+        // Refresh the data profile after transformations
+        const profileData = await api.session.getProfile(session.id);
+        const columnInfos: ColumnInfo[] = profileData.columns.map((col: any) => ({
+          name: col.name,
+          type: col.type,
+          nullCount: col.missing_count,
+          uniqueCount: col.unique_count,
+          sampleValues: col.sample_values,
+          issues: generateColumnIssues(col),
+        }));
+        setColumns(columnInfos);
 
-      // Show success
+        // Clear applied steps
+        setSteps([]);
+
+        // Update quality issues
+        const issues = generateQualityIssues(profileData);
+        setQualityIssues(issues);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply transformations');
     } finally {
       setIsApplying(false);
     }
-  }, [session?.id]);
+  }, [session?.id, steps]);
 
   // Export transformed data
   const handleExport = useCallback(async (format: 'csv' | 'excel' | 'json') => {
