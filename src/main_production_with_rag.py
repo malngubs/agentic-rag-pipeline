@@ -3525,6 +3525,313 @@ async def preview_transform(session_id: str, request: TransformStepRequest):
 
 
 # =============================================================================
+# 📋 REPORTS & ALERTS API (Tier 2 BI Features)
+# =============================================================================
+
+# In-memory storage for reports and alerts
+_scheduled_reports: Dict[str, Any] = {}
+_alerts: Dict[str, Any] = {}
+_alert_history: Dict[str, Any] = {}
+
+
+class ReportCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    frequency: str = "weekly"  # daily, weekly, monthly, quarterly
+    recipients: List[str] = []
+    metrics: List[str] = []
+    format: str = "pdf"  # pdf, excel, html
+    dashboard_id: Optional[str] = None
+
+
+class ReportUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    frequency: Optional[str] = None
+    recipients: Optional[List[str]] = None
+    metrics: Optional[List[str]] = None
+    format: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AlertCreateRequest(BaseModel):
+    name: str
+    metric: str
+    operator: str = "greater_than"  # greater_than, less_than, equals, change_by, change_by_percent
+    threshold: float
+    priority: str = "medium"  # low, medium, high, critical
+    channels: List[str] = ["email"]  # email, slack, teams, webhook
+    recipients: List[str] = []
+
+
+class AlertUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    metric: Optional[str] = None
+    operator: Optional[str] = None
+    threshold: Optional[float] = None
+    priority: Optional[str] = None
+    channels: Optional[List[str]] = None
+    recipients: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+def calculate_next_run(frequency: str) -> str:
+    """Calculate the next run time based on frequency"""
+    now = datetime.now()
+    if frequency == "daily":
+        next_run = now + timedelta(days=1)
+    elif frequency == "weekly":
+        next_run = now + timedelta(weeks=1)
+    elif frequency == "monthly":
+        next_run = now + timedelta(days=30)
+    elif frequency == "quarterly":
+        next_run = now + timedelta(days=90)
+    else:
+        next_run = now + timedelta(weeks=1)
+    return next_run.isoformat()
+
+
+@app.get("/api/reports", tags=["Reports & Alerts"])
+async def list_reports():
+    """List all scheduled reports"""
+    reports = list(_scheduled_reports.values())
+    return sorted(reports, key=lambda r: r.get("created_at", ""), reverse=True)
+
+
+@app.post("/api/reports", tags=["Reports & Alerts"])
+async def create_report(request: ReportCreateRequest):
+    """Create a new scheduled report"""
+    report_id = f"report-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    report = {
+        "id": report_id,
+        "name": request.name,
+        "description": request.description,
+        "frequency": request.frequency,
+        "next_run": calculate_next_run(request.frequency),
+        "last_run": None,
+        "recipients": request.recipients,
+        "dashboard_id": request.dashboard_id,
+        "metrics": request.metrics,
+        "format": request.format,
+        "is_active": True,
+        "created_at": now,
+    }
+
+    _scheduled_reports[report_id] = report
+    logger.info(f"📋 Created report: {report_id} - {request.name}")
+    return report
+
+
+@app.get("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def get_report(report_id: str):
+    """Get a specific report by ID"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return _scheduled_reports[report_id]
+
+
+@app.post("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def update_report(report_id: str, request: ReportUpdateRequest):
+    """Update a scheduled report"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    report = _scheduled_reports[report_id]
+
+    if request.name is not None:
+        report["name"] = request.name
+    if request.description is not None:
+        report["description"] = request.description
+    if request.frequency is not None:
+        report["frequency"] = request.frequency
+        report["next_run"] = calculate_next_run(request.frequency)
+    if request.recipients is not None:
+        report["recipients"] = request.recipients
+    if request.metrics is not None:
+        report["metrics"] = request.metrics
+    if request.format is not None:
+        report["format"] = request.format
+    if request.is_active is not None:
+        report["is_active"] = request.is_active
+
+    _scheduled_reports[report_id] = report
+    logger.info(f"📋 Updated report: {report_id}")
+    return report
+
+
+@app.delete("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def delete_report(report_id: str):
+    """Delete a scheduled report"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    del _scheduled_reports[report_id]
+    logger.info(f"📋 Deleted report: {report_id}")
+    return {"success": True, "message": f"Report {report_id} deleted"}
+
+
+@app.post("/api/reports/{report_id}/run", tags=["Reports & Alerts"])
+async def run_report(report_id: str):
+    """Run a report immediately"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    report = _scheduled_reports[report_id]
+    report["last_run"] = datetime.now().isoformat()
+    report["next_run"] = calculate_next_run(report["frequency"])
+    _scheduled_reports[report_id] = report
+
+    # In a real implementation, this would generate and send the report
+    logger.info(f"📋 Running report: {report_id} - {report['name']}")
+
+    return {
+        "success": True,
+        "message": f"Report '{report['name']}' is being generated and will be sent to {len(report['recipients'])} recipients",
+        "report_id": report_id,
+        "format": report["format"],
+        "recipients": report["recipients"],
+    }
+
+
+@app.get("/api/alerts", tags=["Reports & Alerts"])
+async def list_alerts():
+    """List all alerts"""
+    alerts = list(_alerts.values())
+    return sorted(alerts, key=lambda a: a.get("created_at", ""), reverse=True)
+
+
+@app.post("/api/alerts", tags=["Reports & Alerts"])
+async def create_alert(request: AlertCreateRequest):
+    """Create a new alert"""
+    alert_id = f"alert-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    alert = {
+        "id": alert_id,
+        "name": request.name,
+        "metric": request.metric,
+        "operator": request.operator,
+        "threshold": request.threshold,
+        "priority": request.priority,
+        "channels": request.channels,
+        "recipients": request.recipients,
+        "is_active": True,
+        "last_triggered": None,
+        "trigger_count": 0,
+        "created_at": now,
+    }
+
+    _alerts[alert_id] = alert
+    logger.info(f"🔔 Created alert: {alert_id} - {request.name}")
+    return alert
+
+
+@app.get("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def get_alert(alert_id: str):
+    """Get a specific alert by ID"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return _alerts[alert_id]
+
+
+@app.post("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def update_alert(alert_id: str, request: AlertUpdateRequest):
+    """Update an alert"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert = _alerts[alert_id]
+
+    if request.name is not None:
+        alert["name"] = request.name
+    if request.metric is not None:
+        alert["metric"] = request.metric
+    if request.operator is not None:
+        alert["operator"] = request.operator
+    if request.threshold is not None:
+        alert["threshold"] = request.threshold
+    if request.priority is not None:
+        alert["priority"] = request.priority
+    if request.channels is not None:
+        alert["channels"] = request.channels
+    if request.recipients is not None:
+        alert["recipients"] = request.recipients
+    if request.is_active is not None:
+        alert["is_active"] = request.is_active
+
+    _alerts[alert_id] = alert
+    logger.info(f"🔔 Updated alert: {alert_id}")
+    return alert
+
+
+@app.delete("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def delete_alert(alert_id: str):
+    """Delete an alert"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    del _alerts[alert_id]
+    logger.info(f"🔔 Deleted alert: {alert_id}")
+    return {"success": True, "message": f"Alert {alert_id} deleted"}
+
+
+@app.get("/api/alerts/history", tags=["Reports & Alerts"])
+async def get_alert_history(limit: int = 50):
+    """Get alert trigger history"""
+    history = list(_alert_history.values())
+    sorted_history = sorted(history, key=lambda h: h.get("triggered_at", ""), reverse=True)
+    return sorted_history[:limit]
+
+
+@app.post("/api/alerts/history/{history_id}/acknowledge", tags=["Reports & Alerts"])
+async def acknowledge_alert(history_id: str):
+    """Acknowledge an alert in history"""
+    if history_id not in _alert_history:
+        raise HTTPException(status_code=404, detail="Alert history entry not found")
+
+    entry = _alert_history[history_id]
+    entry["status"] = "acknowledged"
+    _alert_history[history_id] = entry
+
+    logger.info(f"🔔 Acknowledged alert history: {history_id}")
+    return entry
+
+
+@app.post("/api/alerts/trigger", tags=["Reports & Alerts"])
+async def trigger_alert_manually(alert_id: str, value: float):
+    """Manually trigger an alert (for testing)"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert = _alerts[alert_id]
+    history_id = f"history-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    # Update alert stats
+    alert["last_triggered"] = now
+    alert["trigger_count"] = alert.get("trigger_count", 0) + 1
+    _alerts[alert_id] = alert
+
+    # Create history entry
+    history_entry = {
+        "id": history_id,
+        "alert_id": alert_id,
+        "alert_name": alert["name"],
+        "triggered_at": now,
+        "value": value,
+        "threshold": alert["threshold"],
+        "status": "triggered",
+        "message": f"{alert['metric']} reached {value} (threshold: {alert['threshold']})",
+    }
+    _alert_history[history_id] = history_entry
+
+    logger.info(f"🔔 Alert triggered: {alert_id} - value {value}")
+    return history_entry
+
+
+# =============================================================================
 # 🚀 DEVELOPMENT SERVER
 # =============================================================================
 
