@@ -3832,6 +3832,364 @@ async def trigger_alert_manually(alert_id: str, value: float):
 
 
 # =============================================================================
+# 👥 COLLABORATION API (Tier 2 BI Features)
+# =============================================================================
+
+# In-memory storage for collaboration features
+_workspaces: Dict[str, Any] = {}
+_shared_resources: Dict[str, Any] = {}
+_comments: Dict[str, Any] = {}
+_activity_feed: List[Any] = []
+
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    icon: str = "folder"
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ResourceShareRequest(BaseModel):
+    visibility: str = "team"  # private, team, organization, public
+    shared_with: Optional[List[str]] = None
+
+
+class CommentCreateRequest(BaseModel):
+    content: str
+    mentions: Optional[List[str]] = None
+
+
+# Initialize with default workspace
+def _ensure_default_workspace():
+    if not _workspaces:
+        default_ws = {
+            "id": "ws-default",
+            "name": "General",
+            "description": "Default workspace for all team members",
+            "icon": "folder",
+            "member_count": 1,
+            "resource_count": 0,
+            "created_at": datetime.now().isoformat(),
+            "is_default": True,
+        }
+        _workspaces["ws-default"] = default_ws
+
+
+@app.get("/api/workspaces", tags=["Collaboration"])
+async def list_workspaces():
+    """List all workspaces"""
+    _ensure_default_workspace()
+    workspaces = list(_workspaces.values())
+    return sorted(workspaces, key=lambda w: (not w.get("is_default", False), w.get("name", "")))
+
+
+@app.post("/api/workspaces", tags=["Collaboration"])
+async def create_workspace(request: WorkspaceCreateRequest):
+    """Create a new workspace"""
+    workspace_id = f"ws-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    workspace = {
+        "id": workspace_id,
+        "name": request.name,
+        "description": request.description,
+        "icon": request.icon,
+        "member_count": 1,
+        "resource_count": 0,
+        "created_at": now,
+        "is_default": False,
+    }
+
+    _workspaces[workspace_id] = workspace
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "create",
+        "actor_name": "You",
+        "content": f'created workspace "{request.name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"👥 Created workspace: {workspace_id} - {request.name}")
+    return workspace
+
+
+@app.get("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def get_workspace(workspace_id: str):
+    """Get a specific workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return _workspaces[workspace_id]
+
+
+@app.post("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def update_workspace(workspace_id: str, request: WorkspaceUpdateRequest):
+    """Update a workspace"""
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    workspace = _workspaces[workspace_id]
+
+    if request.name is not None:
+        workspace["name"] = request.name
+    if request.description is not None:
+        workspace["description"] = request.description
+    if request.icon is not None:
+        workspace["icon"] = request.icon
+
+    _workspaces[workspace_id] = workspace
+    logger.info(f"👥 Updated workspace: {workspace_id}")
+    return workspace
+
+
+@app.delete("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def delete_workspace(workspace_id: str):
+    """Delete a workspace"""
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    workspace = _workspaces[workspace_id]
+    if workspace.get("is_default"):
+        raise HTTPException(status_code=400, detail="Cannot delete default workspace")
+
+    del _workspaces[workspace_id]
+    logger.info(f"👥 Deleted workspace: {workspace_id}")
+    return {"success": True, "message": f"Workspace {workspace_id} deleted"}
+
+
+@app.get("/api/workspaces/{workspace_id}/members", tags=["Collaboration"])
+async def get_workspace_members(workspace_id: str):
+    """Get members of a workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # Return mock members for now
+    return [
+        {
+            "id": "user-1",
+            "name": "You",
+            "email": "user@company.com",
+            "role": "owner",
+            "is_online": True,
+        }
+    ]
+
+
+@app.get("/api/workspaces/{workspace_id}/resources", tags=["Collaboration"])
+async def list_workspace_resources(workspace_id: str):
+    """List resources in a workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    resources = [r for r in _shared_resources.values() if r.get("workspace_id") == workspace_id]
+    return sorted(resources, key=lambda r: r.get("updated_at", ""), reverse=True)
+
+
+@app.post("/api/resources/{resource_id}/share", tags=["Collaboration"])
+async def share_resource(resource_id: str, request: ResourceShareRequest):
+    """Share a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    resource = _shared_resources[resource_id]
+    resource["visibility"] = request.visibility
+    if request.shared_with:
+        resource["shared_with"] = request.shared_with
+    resource["updated_at"] = datetime.now().isoformat()
+
+    _shared_resources[resource_id] = resource
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "share",
+        "actor_name": "You",
+        "content": f'shared "{resource["name"]}" with visibility: {request.visibility}',
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    logger.info(f"👥 Shared resource: {resource_id}")
+    return resource
+
+
+@app.get("/api/resources/{resource_id}/comments", tags=["Collaboration"])
+async def get_resource_comments(resource_id: str):
+    """Get comments for a resource"""
+    comments = [c for c in _comments.values() if c.get("resource_id") == resource_id]
+    return sorted(comments, key=lambda c: c.get("created_at", ""), reverse=True)
+
+
+@app.post("/api/resources/{resource_id}/comments", tags=["Collaboration"])
+async def add_comment(resource_id: str, request: CommentCreateRequest):
+    """Add a comment to a resource"""
+    comment_id = f"comment-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    comment = {
+        "id": comment_id,
+        "resource_id": resource_id,
+        "author_id": "user-1",
+        "author_name": "You",
+        "content": request.content,
+        "mentions": request.mentions or [],
+        "created_at": now,
+        "reply_count": 0,
+        "like_count": 0,
+    }
+
+    _comments[comment_id] = comment
+
+    # Update resource comment count
+    if resource_id in _shared_resources:
+        _shared_resources[resource_id]["comment_count"] = _shared_resources[resource_id].get("comment_count", 0) + 1
+
+    # Add activity
+    resource_name = _shared_resources.get(resource_id, {}).get("name", "a resource")
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "comment",
+        "actor_name": "You",
+        "content": f'commented on "{resource_name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"💬 Added comment: {comment_id}")
+    return comment
+
+
+@app.post("/api/comments/{comment_id}/like", tags=["Collaboration"])
+async def like_comment(comment_id: str):
+    """Like a comment"""
+    if comment_id not in _comments:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    _comments[comment_id]["like_count"] = _comments[comment_id].get("like_count", 0) + 1
+    return _comments[comment_id]
+
+
+@app.get("/api/activity", tags=["Collaboration"])
+async def get_activity_feed(workspace_id: Optional[str] = None, limit: int = 50):
+    """Get activity feed"""
+    activities = _activity_feed[:limit]
+    return activities
+
+
+@app.post("/api/resources", tags=["Collaboration"])
+async def create_shared_resource(
+    name: str,
+    type: str,
+    workspace_id: str,
+    description: Optional[str] = "",
+    visibility: str = "team"
+):
+    """Create a shared resource"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    resource_id = f"res-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    resource = {
+        "id": resource_id,
+        "name": name,
+        "type": type,
+        "description": description,
+        "visibility": visibility,
+        "owner_id": "user-1",
+        "owner_name": "You",
+        "workspace_id": workspace_id,
+        "created_at": now,
+        "updated_at": now,
+        "view_count": 0,
+        "like_count": 0,
+        "comment_count": 0,
+    }
+
+    _shared_resources[resource_id] = resource
+
+    # Update workspace resource count
+    _workspaces[workspace_id]["resource_count"] = _workspaces[workspace_id].get("resource_count", 0) + 1
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "create",
+        "actor_name": "You",
+        "content": f'created "{name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"📄 Created resource: {resource_id} - {name}")
+    return resource
+
+
+@app.get("/api/resources/{resource_id}", tags=["Collaboration"])
+async def get_resource(resource_id: str):
+    """Get a specific resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    # Increment view count
+    _shared_resources[resource_id]["view_count"] = _shared_resources[resource_id].get("view_count", 0) + 1
+
+    return _shared_resources[resource_id]
+
+
+@app.post("/api/resources/{resource_id}/like", tags=["Collaboration"])
+async def like_resource(resource_id: str):
+    """Like a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    _shared_resources[resource_id]["like_count"] = _shared_resources[resource_id].get("like_count", 0) + 1
+
+    resource = _shared_resources[resource_id]
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "like",
+        "actor_name": "You",
+        "content": f'liked "{resource["name"]}"',
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    return _shared_resources[resource_id]
+
+
+@app.delete("/api/resources/{resource_id}", tags=["Collaboration"])
+async def delete_resource(resource_id: str):
+    """Delete a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    resource = _shared_resources[resource_id]
+    workspace_id = resource.get("workspace_id")
+
+    del _shared_resources[resource_id]
+
+    # Update workspace resource count
+    if workspace_id and workspace_id in _workspaces:
+        _workspaces[workspace_id]["resource_count"] = max(0, _workspaces[workspace_id].get("resource_count", 1) - 1)
+
+    # Remove associated comments
+    comment_ids_to_remove = [c_id for c_id, c in _comments.items() if c.get("resource_id") == resource_id]
+    for c_id in comment_ids_to_remove:
+        del _comments[c_id]
+
+    logger.info(f"📄 Deleted resource: {resource_id}")
+    return {"success": True, "message": f"Resource {resource_id} deleted"}
+
+
+# =============================================================================
 # 🚀 DEVELOPMENT SERVER
 # =============================================================================
 
