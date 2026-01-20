@@ -28,7 +28,10 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
+import { api } from '@/lib/api/client';
 
 // Types
 interface Document {
@@ -46,41 +49,72 @@ interface Analytics {
   total_cost: number;
 }
 
+interface HealthComponent {
+  status: string;
+  initialized?: string;
+  provider?: string;
+  connections?: string;
+  total?: string;
+}
+
+interface HealthResponse {
+  status: string;
+  components: {
+    rag_system: HealthComponent;
+    vector_store: HealthComponent;
+    llm_service: HealthComponent;
+    websocket: HealthComponent;
+    conversations: HealthComponent;
+    analytics: HealthComponent;
+    citations: HealthComponent;
+  };
+}
+
 export default function AdminPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch documents and analytics on mount
+  // Fetch all data on mount
   useEffect(() => {
-    fetchDocuments();
-    fetchAnalytics();
+    loadData();
   }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    await Promise.all([fetchDocuments(), fetchAnalytics(), fetchHealth()]);
+    setLoading(false);
+  };
 
   const fetchDocuments = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/documents/list`);
-      if (response.ok) {
-        const data = await response.json();
-        setDocuments(data.documents || []);
-      }
+      const data = await api.documents.list();
+      setDocuments(data.documents || []);
     } catch (error) {
       console.error('Failed to fetch documents:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
   const fetchAnalytics = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/analytics/summary`);
-      if (response.ok) {
-        const data = await response.json();
-        setAnalytics(data);
-      }
+      const data = await api.analytics.summary();
+      setAnalytics(data);
     } catch (error) {
       console.error('Failed to fetch analytics:', error);
+    }
+  };
+
+  const fetchHealth = async () => {
+    try {
+      const data = await api.health();
+      setHealth(data);
+    } catch (error) {
+      console.error('Failed to fetch health:', error);
+      setError('Unable to connect to backend API');
     }
   };
 
@@ -89,21 +123,12 @@ export default function AdminPage() {
     if (!file) return;
 
     setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (response.ok) {
-        await fetchDocuments();
-        await fetchAnalytics();
-      }
+      await api.documents.upload(file);
+      await Promise.all([fetchDocuments(), fetchAnalytics()]);
     } catch (error) {
       console.error('Upload failed:', error);
+      setError('Failed to upload document');
     } finally {
       setUploading(false);
     }
@@ -113,17 +138,20 @@ export default function AdminPage() {
     if (!confirm('Delete this document?')) return;
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/documents/${docId}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await fetchDocuments();
-        await fetchAnalytics();
-      }
+      await api.documents.delete(docId);
+      await Promise.all([fetchDocuments(), fetchAnalytics()]);
     } catch (error) {
       console.error('Delete failed:', error);
+      setError('Failed to delete document');
     }
+  };
+
+  const getHealthStatus = (component: HealthComponent | undefined) => {
+    if (!component) return { icon: AlertCircle, color: 'text-foreground-muted', label: 'Unknown' };
+    if (component.status === 'healthy') return { icon: CheckCircle2, color: 'text-success', label: 'Operational' };
+    if (component.status === 'degraded') return { icon: AlertTriangle, color: 'text-warning', label: 'Degraded' };
+    if (component.status === 'disabled') return { icon: AlertCircle, color: 'text-foreground-muted', label: 'Disabled' };
+    return { icon: AlertCircle, color: 'text-error', label: 'Error' };
   };
 
   return (
@@ -213,13 +241,15 @@ export default function AdminPage() {
               <p className="text-sm text-foreground-muted">Manage documents and monitor system</p>
             </div>
             <button
-              onClick={() => {
-                fetchDocuments();
-                fetchAnalytics();
-              }}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-surface-hover transition-colors"
+              onClick={loadData}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-surface-hover transition-colors disabled:opacity-50"
             >
-              <RefreshCw className="w-4 h-4" />
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
               Refresh
             </button>
           </div>
@@ -317,32 +347,96 @@ export default function AdminPage() {
             )}
           </div>
 
+          {/* Error Banner */}
+          {error && (
+            <div className="glass border border-error/30 bg-error/10 rounded-xl p-4 flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-error flex-shrink-0" />
+              <p className="text-error">{error}</p>
+              <button
+                onClick={() => setError(null)}
+                className="ml-auto text-error hover:text-error/80"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           {/* System Health */}
           <div className="glass border border-white/10 rounded-xl p-6">
             <h2 className="text-lg font-semibold text-foreground mb-6">System Health</h2>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-success" />
-                  <span className="text-foreground">Backend API</span>
-                </div>
-                <span className="text-sm text-success">Operational</span>
+            {!health ? (
+              <div className="text-center py-8">
+                {loading ? (
+                  <>
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" />
+                    <p className="mt-4 text-foreground-muted">Checking system health...</p>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-8 h-8 mx-auto text-error" />
+                    <p className="mt-4 text-error">Unable to connect to backend</p>
+                  </>
+                )}
               </div>
-              <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-success" />
-                  <span className="text-foreground">Vector Database (Qdrant)</span>
-                </div>
-                <span className="text-sm text-success">Operational</span>
+            ) : (
+              <div className="space-y-3">
+                {(() => {
+                  const backendStatus = getHealthStatus({ status: health.status === 'healthy' ? 'healthy' : 'degraded' });
+                  const BackendIcon = backendStatus.icon;
+                  return (
+                    <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
+                      <div className="flex items-center gap-3">
+                        <BackendIcon className={`w-5 h-5 ${backendStatus.color}`} />
+                        <span className="text-foreground">Backend API</span>
+                      </div>
+                      <span className={`text-sm ${backendStatus.color}`}>{backendStatus.label}</span>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const vectorStatus = getHealthStatus(health.components?.vector_store);
+                  const VectorIcon = vectorStatus.icon;
+                  return (
+                    <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
+                      <div className="flex items-center gap-3">
+                        <VectorIcon className={`w-5 h-5 ${vectorStatus.color}`} />
+                        <span className="text-foreground">Vector Database (Qdrant)</span>
+                      </div>
+                      <span className={`text-sm ${vectorStatus.color}`}>{vectorStatus.label}</span>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const llmStatus = getHealthStatus(health.components?.llm_service);
+                  const LlmIcon = llmStatus.icon;
+                  return (
+                    <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
+                      <div className="flex items-center gap-3">
+                        <LlmIcon className={`w-5 h-5 ${llmStatus.color}`} />
+                        <span className="text-foreground">OpenAI API</span>
+                        {health.components?.llm_service?.provider && (
+                          <span className="text-xs text-foreground-muted">({health.components.llm_service.provider})</span>
+                        )}
+                      </div>
+                      <span className={`text-sm ${llmStatus.color}`}>{llmStatus.label}</span>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const ragStatus = getHealthStatus(health.components?.rag_system);
+                  const RagIcon = ragStatus.icon;
+                  return (
+                    <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
+                      <div className="flex items-center gap-3">
+                        <RagIcon className={`w-5 h-5 ${ragStatus.color}`} />
+                        <span className="text-foreground">RAG System</span>
+                      </div>
+                      <span className={`text-sm ${ragStatus.color}`}>{ragStatus.label}</span>
+                    </div>
+                  );
+                })()}
               </div>
-              <div className="flex items-center justify-between p-3 bg-surface rounded-lg border border-border">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-success" />
-                  <span className="text-foreground">OpenAI API</span>
-                </div>
-                <span className="text-sm text-success">Operational</span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </main>

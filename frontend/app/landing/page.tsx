@@ -69,7 +69,9 @@ export default function LandingPage() {
             </Link>
 
             <a
-              href="/desktop-app/download"
+              href="https://github.com/macrocomm/bi-platform/releases"
+              target="_blank"
+              rel="noopener noreferrer"
               className="glass border border-white/10 px-8 py-4 rounded-xl flex items-center gap-3 text-foreground font-medium text-lg transition-all hover:bg-surface-hover"
             >
               <Zap className="w-5 h-5" />
@@ -115,7 +117,7 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-border py-6">
         <div className="max-w-7xl mx-auto px-6 text-center text-sm text-foreground-muted">
-          <p>&copy; 2024 Macrocomm. All rights reserved. | Smart Made Simple</p>
+          <p>&copy; {new Date().getFullYear()} Macrocomm. All rights reserved. | Smart Made Simple</p>
         </div>
       </footer>
     </div>

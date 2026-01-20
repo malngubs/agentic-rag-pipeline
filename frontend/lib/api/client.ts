@@ -1162,13 +1162,23 @@ export async function checkApiHealth(): Promise<boolean> {
 export const api = {
   chat: chatApi,
   document: documentApi,
-  analytics: analyticsApi,
+  // Convenience alias for admin page
+  documents: {
+    list: documentApi.list,
+    upload: documentApi.upload,
+    delete: documentApi.delete,
+  },
+  analytics: {
+    ...analyticsApi,
+    summary: analyticsApi.getSummary,
+  },
   conversation: conversationApi,
   session: sessionApi,
   reports: reportsApi,
   collaboration: collaborationApi,
   transform: transformApi,
   nlQuery: nlQueryApi,
+  health: checkHealth,
   checkHealth,
   checkApiHealth,
   ChatWebSocket,

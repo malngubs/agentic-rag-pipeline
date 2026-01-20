@@ -25,7 +25,7 @@ import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
+from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
@@ -633,13 +633,17 @@ async def root():
             "validate_api_key": "/api/auth/validate-key",
             "documents_scoped": "/api/documents/scoped",
             "upload_scoped": "/api/documents/upload-scoped",
-            # Frontend endpoints
-            "workspace": "/workspace",
-            "docs": "/docs",
-            "widget_demo": "/frontend/widget/demo.html",
-            "admin": "/frontend/widget/admin.html"
+            # API Documentation
+            "docs": "/docs"
         },
-        "websocket": "/ws/chat"
+        "websocket": "/ws/chat",
+        "frontend": {
+            "note": "Next.js frontend runs on port 3000",
+            "chat": "http://localhost:3000/chat",
+            "admin": "http://localhost:3000/admin",
+            "transform": "http://localhost:3000/transform",
+            "dashboards": "http://localhost:3000/dashboards"
+        }
     }
 
 @app.get("/favicon.ico")
@@ -648,127 +652,65 @@ async def favicon():
     return Response(status_code=204)
 
 # =============================================================================
-# 🌐 HTML SERVING ROUTES - Production Frontend
+# 🌐 FRONTEND REDIRECT ROUTES
+# =============================================================================
+# The frontend is served by Next.js (port 3000 in development).
+# These routes provide API info for legacy URL requests.
 # =============================================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_index():
-    """Serve the main index.html page"""
-    try:
-        possible_paths = [
-            Path("../index.html"),
-            Path("index.html"),
-            Path("./index.html"),
-            Path(__file__).parent / "index.html",
-            Path(__file__).parent.parent / "index.html"
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-        
-        raise HTTPException(status_code=404, detail="Index page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving index.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/")
+async def api_root_info():
+    """API root - provides info about the backend API"""
+    return {
+        "service": "Macrocomm BI Platform API",
+        "version": "2.2.0",
+        "status": "healthy",
+        "frontend": "Next.js frontend runs on port 3000",
+        "endpoints": {
+            "health": "/health",
+            "api_docs": "/docs",
+            "chat": "/api/chat",
+            "websocket": "/ws/chat"
+        },
+        "message": "This is the backend API. For the web interface, access the Next.js frontend."
+    }
 
-@app.get("/admin.html", response_class=HTMLResponse)
-async def serve_admin():
-    """Serve the admin portal page"""
-    try:
-        possible_paths = [
-            Path("../admin.html"),
-            Path("admin.html"),
-            Path("./admin.html"),
-            Path(__file__).parent / "admin.html",
-            Path(__file__).parent.parent / "admin.html"
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-        
-        raise HTTPException(status_code=404, detail="Admin page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving admin.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/admin.html")
+@app.get("/login.html")
+@app.get("/workspace")
+@app.get("/workspace.html")
+async def legacy_html_redirect():
+    """Legacy HTML routes - inform about Next.js frontend"""
+    return {
+        "message": "HTML pages have been migrated to Next.js frontend",
+        "frontend_url": "http://localhost:3000",
+        "routes": {
+            "admin": "http://localhost:3000/admin",
+            "login": "http://localhost:3000/login",
+            "workspace": "http://localhost:3000/transform",
+            "chat": "http://localhost:3000/chat"
+        }
+    }
 
-
-@app.get("/login.html", response_class=HTMLResponse)
-async def serve_login():
-    """Serve the login page"""
-    try:
-        possible_paths = [
-            Path("../login.html"),
-            Path("login.html"),
-            Path("./login.html"),
-            Path(__file__).parent / "login.html",
-            Path(__file__).parent.parent / "login.html"
-        ]
-
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-
-        raise HTTPException(status_code=404, detail="Login page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving login.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/workspace", response_class=HTMLResponse)
-@app.get("/workspace.html", response_class=HTMLResponse)
-async def workspace():
-    """Serve the Data Analysis Workspace"""
-    possible_paths = [
-        Path("../workspace.html"),
-        Path("workspace.html"),
-        Path("./workspace.html"),
-        Path(__file__).parent / "workspace.html",
-        Path(__file__).parent.parent / "workspace.html"
-    ]
-
-    for path in possible_paths:
-        if path.exists():
-            logger.info(f"Serving workspace.html from: {path}")
-            return HTMLResponse(content=path.read_text(), status_code=200)
-
-    logger.warning("workspace.html not found in any expected location")
-    return HTMLResponse(
-        content="""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Workspace Not Found</title>
-            <style>
-                body { font-family: -apple-system, sans-serif; padding: 60px; text-align: center; background: #f5f5f5; }
-                .container { background: white; padding: 40px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #FF6E00; }
-                p { color: #666; margin: 15px 0; }
-                a { color: #FF6E00; text-decoration: none; font-weight: 600; }
-                a:hover { text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>📊 Data Analysis Workspace</h1>
-                <p>workspace.html not found in project root.</p>
-                <p>Download it from Claude and place it in the same folder as admin.html</p>
-                <p><a href="/admin.html">← Back to Admin Dashboard</a></p>
-            </div>
-        </body>
-        </html>
-        """,
-        status_code=404
-    )
+@app.get("/desktop-app/download")
+async def desktop_app_download():
+    """Desktop app download information"""
+    return {
+        "product": "Macrocomm BI Platform Desktop App",
+        "description": "Cross-platform desktop application built with Electron",
+        "build_instructions": {
+            "step_1": "Navigate to desktop-app directory: cd desktop-app",
+            "step_2": "Install dependencies: npm install",
+            "step_3": "Build for your platform: npm run build",
+            "step_4": "Find builds in the 'dist' folder"
+        },
+        "platforms": ["Windows (.exe)", "macOS (.dmg)", "Linux (.AppImage)"],
+        "source_location": "desktop-app/",
+        "requirements": {
+            "nodejs": ">=18.0.0",
+            "npm": ">=8.0.0"
+        }
+    }
 
 
 @app.get("/health", response_model=HealthResponse)
