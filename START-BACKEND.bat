@@ -5,7 +5,7 @@ REM ============================================================================
 
 echo.
 echo ========================================
-echo   Starting Backend (Port 8000)
+echo   Starting Backend (Port 8001)
 echo ========================================
 echo.
 
@@ -25,9 +25,9 @@ echo [2/2] Starting FastAPI backend...
 echo.
 echo ========================================
 echo   Backend will start on:
-echo   http://localhost:8000
-echo   Health: http://localhost:8000/health
-echo   API Docs: http://localhost:8000/docs
+echo   http://localhost:8001
+echo   Health: http://localhost:8001/health
+echo   API Docs: http://localhost:8001/docs
 echo ========================================
 echo.
 

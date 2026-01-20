@@ -4194,12 +4194,15 @@ async def delete_resource(resource_id: str):
 # =============================================================================
 
 if __name__ == "__main__":
+    import os
+    port = int(os.getenv("API_PORT", "8001"))
     logger.info("🚀 Starting RAG-enabled development server with Phase 1 Features...")
-    logger.info("📊 Features: Analytics ✅, Citations ✅, Conversation History ✅")
+    logger.info(f"📊 Features: Analytics ✅, Citations ✅, Conversation History ✅")
+    logger.info(f"🌐 Server will run on http://127.0.0.1:{port}")
     uvicorn.run(
         "main_production_with_rag:app",
         host="127.0.0.1",
-        port=8000,
+        port=port,
         reload=True,
         access_log=True,
         log_level="info",
