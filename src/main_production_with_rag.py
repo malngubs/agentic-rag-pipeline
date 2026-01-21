@@ -3305,7 +3305,7 @@ async def execute_sql(session_id: str, request: ExecuteSQLRequest):
 
     try:
         import pandas as pd
-        import pandasql as ps
+        import pandasql as ps  # type: ignore  # Optional dependency
 
         df = session["data"]
         file_name = session.get("file_name", "data")
