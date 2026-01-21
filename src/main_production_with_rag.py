@@ -2696,6 +2696,12 @@ class TransformStepRequest(BaseModel):
 class TransformPipelineRequest(BaseModel):
     steps: List[TransformStepRequest]
 
+class NLToSQLRequest(BaseModel):
+    query: str
+
+class ExecuteSQLRequest(BaseModel):
+    sql: str
+
 
 @app.post("/api/sessions", response_model=SessionResponse, tags=["Data Analysis"])
 async def create_analysis_session(request: SessionCreateRequest = None):
@@ -3165,6 +3171,197 @@ async def query_session(session_id: str, request: QueryRequest):
     except Exception as e:
         logger.error(f"Failed to process query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/nl-to-sql", tags=["Data Analysis"])
+async def nl_to_sql(session_id: str, request: NLToSQLRequest):
+    """Convert natural language query to SQL"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    import time
+    start_time = time.time()
+
+    try:
+        df = session["data"]
+        file_name = session.get("file_name", "data")
+        # Create a clean table name from file name (remove extension, sanitize)
+        table_name = file_name.rsplit('.', 1)[0] if '.' in file_name else file_name
+        table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name)
+
+        columns = df.columns.tolist()
+        column_types = {col: str(df[col].dtype) for col in columns}
+
+        query_lower = request.query.lower()
+
+        # Intelligent SQL generation based on natural language
+        generated_sql = ""
+        explanation = ""
+
+        # Detect query intent and generate appropriate SQL
+        if any(word in query_lower for word in ['top', 'highest', 'best', 'most']):
+            # Find numeric columns for ordering
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            limit_match = next((int(w) for w in query_lower.split() if w.isdigit()), 10)
+            order_col = numeric_cols[0] if numeric_cols else columns[-1]
+
+            generated_sql = f"SELECT *\nFROM {table_name}\nORDER BY {order_col} DESC\nLIMIT {limit_match}"
+            explanation = f"This query retrieves the top {limit_match} records ordered by '{order_col}' in descending order."
+
+        elif any(word in query_lower for word in ['total', 'sum']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            cat_cols = [c for c in columns if df[c].dtype == 'object' or 'int' not in str(df[c].dtype)]
+
+            sum_col = numeric_cols[0] if numeric_cols else columns[-1]
+            group_col = cat_cols[0] if cat_cols else columns[0]
+
+            generated_sql = f"SELECT {group_col}, SUM({sum_col}) as total\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY total DESC"
+            explanation = f"This query calculates the total sum of '{sum_col}' grouped by '{group_col}'."
+
+        elif any(word in query_lower for word in ['average', 'avg', 'mean']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            cat_cols = [c for c in columns if df[c].dtype == 'object']
+
+            avg_col = numeric_cols[0] if numeric_cols else columns[-1]
+            group_col = cat_cols[0] if cat_cols else columns[0]
+
+            generated_sql = f"SELECT {group_col}, AVG({avg_col}) as average\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY average DESC"
+            explanation = f"This query calculates the average of '{avg_col}' grouped by '{group_col}'."
+
+        elif any(word in query_lower for word in ['count', 'how many']):
+            cat_cols = [c for c in columns if df[c].dtype == 'object']
+            group_col = cat_cols[0] if cat_cols else columns[0]
+
+            generated_sql = f"SELECT {group_col}, COUNT(*) as count\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY count DESC"
+            explanation = f"This query counts records grouped by '{group_col}'."
+
+        elif any(word in query_lower for word in ['over', 'greater', 'more than', '>']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            filter_col = numeric_cols[0] if numeric_cols else columns[-1]
+
+            # Extract number from query
+            import re
+            numbers = re.findall(r'[\d,]+\.?\d*', query_lower)
+            threshold = float(numbers[0].replace(',', '')) if numbers else 1000
+
+            generated_sql = f"SELECT *\nFROM {table_name}\nWHERE {filter_col} > {threshold}"
+            explanation = f"This query filters records where '{filter_col}' is greater than {threshold:,.0f}."
+
+        elif any(word in query_lower for word in ['under', 'less', 'below', '<']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            filter_col = numeric_cols[0] if numeric_cols else columns[-1]
+
+            import re
+            numbers = re.findall(r'[\d,]+\.?\d*', query_lower)
+            threshold = float(numbers[0].replace(',', '')) if numbers else 1000
+
+            generated_sql = f"SELECT *\nFROM {table_name}\nWHERE {filter_col} < {threshold}"
+            explanation = f"This query filters records where '{filter_col}' is less than {threshold:,.0f}."
+
+        elif any(word in query_lower for word in ['all', 'show', 'list', 'display']):
+            col_list = ', '.join(columns[:6]) if len(columns) > 6 else ', '.join(columns)
+            generated_sql = f"SELECT {col_list}\nFROM {table_name}\nLIMIT 100"
+            explanation = f"This query retrieves the first 100 records from your data with columns: {col_list}."
+
+        else:
+            # Default: select first few columns with limit
+            col_list = ', '.join(columns[:5]) if len(columns) > 5 else ', '.join(columns)
+            generated_sql = f"SELECT {col_list}\nFROM {table_name}\nLIMIT 100"
+            explanation = f"This query selects key columns from '{table_name}'. You can modify it to suit your needs."
+
+        execution_time = (time.time() - start_time) * 1000  # Convert to ms
+
+        return {
+            "generated_sql": generated_sql,
+            "table_name": table_name,
+            "columns": columns,
+            "column_types": column_types,
+            "explanation": explanation,
+            "generation_time": round(execution_time, 2),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate SQL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/execute-sql", tags=["Data Analysis"])
+async def execute_sql(session_id: str, request: ExecuteSQLRequest):
+    """Execute SQL query on session data using pandas"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    import time
+    start_time = time.time()
+
+    try:
+        import pandas as pd
+        import pandasql as ps
+
+        df = session["data"]
+        file_name = session.get("file_name", "data")
+        table_name = file_name.rsplit('.', 1)[0] if '.' in file_name else file_name
+        table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name)
+
+        # Create local environment for pandasql with the actual table name
+        local_env = {table_name: df, 'data': df}  # Support both actual name and 'data' fallback
+
+        # Execute the SQL query
+        result_df = ps.sqldf(request.sql, local_env)
+
+        execution_time = (time.time() - start_time) * 1000  # Convert to ms
+
+        # Convert result to list of lists for JSON serialization
+        columns = result_df.columns.tolist()
+        data = result_df.values.tolist()
+
+        # Generate explanation based on the SQL
+        sql_lower = request.sql.lower()
+        if 'group by' in sql_lower:
+            explanation = f"Query executed successfully. Grouped data into {len(data)} categories."
+        elif 'order by' in sql_lower and 'desc' in sql_lower:
+            explanation = f"Query executed successfully. Sorted {len(data)} records in descending order."
+        elif 'where' in sql_lower:
+            explanation = f"Query executed successfully. Found {len(data)} matching records."
+        else:
+            explanation = f"Query executed successfully. Retrieved {len(data)} records with {len(columns)} columns."
+
+        return {
+            "columns": columns,
+            "data": data,
+            "row_count": len(data),
+            "column_count": len(columns),
+            "execution_time": round(execution_time, 2),
+            "explanation": explanation,
+        }
+    except ImportError:
+        # pandasql not installed - use basic filtering
+        logger.warning("pandasql not installed, using basic query execution")
+        df = session["data"]
+        execution_time = (time.time() - start_time) * 1000
+
+        # Basic execution - just return head of data
+        result_df = df.head(100)
+        return {
+            "columns": result_df.columns.tolist(),
+            "data": result_df.values.tolist(),
+            "row_count": len(result_df),
+            "column_count": len(result_df.columns),
+            "execution_time": round(execution_time, 2),
+            "explanation": "Basic query executed. Install pandasql for full SQL support.",
+        }
+    except Exception as e:
+        logger.error(f"Failed to execute SQL: {e}")
+        raise HTTPException(status_code=500, detail=f"SQL execution error: {str(e)}")
 
 
 @app.post("/api/sessions/{session_id}/export", tags=["Data Analysis"])

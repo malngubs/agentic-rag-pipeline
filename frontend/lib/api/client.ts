@@ -1081,6 +1081,25 @@ export const transformApi = {
 // NATURAL LANGUAGE QUERY API - Tier 2 Feature
 // =============================================================================
 
+export interface NLToSQLResult {
+  generated_sql: string;
+  table_name: string;
+  columns: string[];
+  column_types: Record<string, string>;
+  explanation: string;
+  generation_time: number;
+}
+
+export interface SQLExecutionResult {
+  columns: string[];
+  data: any[][];
+  row_count: number;
+  column_count: number;
+  execution_time: number;
+  explanation: string;
+}
+
+// Legacy interface for backward compatibility
 export interface NLQueryResult {
   natural_query: string;
   generated_sql: string;
@@ -1098,7 +1117,7 @@ export const nlQueryApi = {
   async generateSql(
     sessionId: string,
     query: string
-  ): Promise<{ sql: string; explanation: string }> {
+  ): Promise<NLToSQLResult> {
     return post(`/api/sessions/${sessionId}/nl-to-sql`, { query });
   },
 
@@ -1108,7 +1127,7 @@ export const nlQueryApi = {
   async executeSql(
     sessionId: string,
     sql: string
-  ): Promise<NLQueryResult> {
+  ): Promise<SQLExecutionResult> {
     return post(`/api/sessions/${sessionId}/execute-sql`, { sql });
   },
 
