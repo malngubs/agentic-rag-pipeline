@@ -274,6 +274,193 @@ class DocumentProcessor:
             self.logger.error(f"Error processing {file_path}: {str(e)}")
             return []
     
+    def _generate_dataframe_profile(self, df, source_name: str = "Data") -> str:
+        """
+        Generate a comprehensive data profile for large datasets.
+        This analyzes ALL rows but creates a summary the LLM can understand.
+        Designed for enterprise datasets with 100K+ rows.
+        """
+        import pandas as pd
+        import numpy as np
+
+        parts = []
+        parts.append(f"=== {source_name} ===")
+        parts.append(f"Dataset Shape: {len(df):,} rows × {len(df.columns)} columns")
+        parts.append(f"Memory Usage: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+        parts.append("")
+
+        # Column Overview
+        parts.append("## COLUMN OVERVIEW")
+        parts.append("-" * 50)
+        for col in df.columns:
+            dtype = str(df[col].dtype)
+            non_null = df[col].notna().sum()
+            null_pct = (df[col].isna().sum() / len(df)) * 100
+            unique = df[col].nunique()
+            parts.append(f"• {col}")
+            parts.append(f"    Type: {dtype} | Non-null: {non_null:,} ({100-null_pct:.1f}%) | Unique: {unique:,}")
+        parts.append("")
+
+        # Numeric Column Analysis (FULL statistics on all rows)
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        if numeric_cols:
+            parts.append("## NUMERIC COLUMNS - FULL STATISTICS")
+            parts.append("-" * 50)
+            for col in numeric_cols:
+                series = df[col].dropna()
+                if len(series) == 0:
+                    continue
+
+                stats = series.describe()
+                parts.append(f"\n### {col}")
+                parts.append(f"    Count: {stats['count']:,.0f}")
+                parts.append(f"    Mean: {stats['mean']:,.4f}")
+                parts.append(f"    Std Dev: {stats['std']:,.4f}")
+                parts.append(f"    Min: {stats['min']:,.4f}")
+                parts.append(f"    25th Percentile: {stats['25%']:,.4f}")
+                parts.append(f"    Median (50%): {stats['50%']:,.4f}")
+                parts.append(f"    75th Percentile: {stats['75%']:,.4f}")
+                parts.append(f"    Max: {stats['max']:,.4f}")
+
+                # Additional insights
+                parts.append(f"    Sum: {series.sum():,.4f}")
+                parts.append(f"    Variance: {series.var():,.4f}")
+
+                # Detect outliers using IQR
+                q1, q3 = series.quantile([0.25, 0.75])
+                iqr = q3 - q1
+                outliers_low = (series < (q1 - 1.5 * iqr)).sum()
+                outliers_high = (series > (q3 + 1.5 * iqr)).sum()
+                if outliers_low + outliers_high > 0:
+                    parts.append(f"    Outliers: {outliers_low + outliers_high:,} ({(outliers_low + outliers_high)/len(series)*100:.2f}%)")
+
+                # Distribution shape
+                skewness = series.skew()
+                kurtosis = series.kurtosis()
+                parts.append(f"    Skewness: {skewness:.4f} ({'right-skewed' if skewness > 0.5 else 'left-skewed' if skewness < -0.5 else 'symmetric'})")
+            parts.append("")
+
+        # Categorical Column Analysis
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        if categorical_cols:
+            parts.append("## CATEGORICAL COLUMNS - VALUE DISTRIBUTIONS")
+            parts.append("-" * 50)
+            for col in categorical_cols:
+                series = df[col].dropna()
+                if len(series) == 0:
+                    continue
+
+                value_counts = series.value_counts()
+                parts.append(f"\n### {col}")
+                parts.append(f"    Unique Values: {len(value_counts):,}")
+
+                # Show top values (up to 15)
+                top_n = min(15, len(value_counts))
+                parts.append(f"    Top {top_n} Values:")
+                for val, count in value_counts.head(top_n).items():
+                    pct = (count / len(series)) * 100
+                    parts.append(f"      - {val}: {count:,} ({pct:.1f}%)")
+
+                if len(value_counts) > top_n:
+                    others_count = value_counts.iloc[top_n:].sum()
+                    parts.append(f"      - [Other {len(value_counts) - top_n} values]: {others_count:,}")
+            parts.append("")
+
+        # Date/Time Column Analysis
+        datetime_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
+        # Also check for object columns that might be dates
+        for col in df.select_dtypes(include=['object']).columns:
+            try:
+                pd.to_datetime(df[col].head(100), errors='raise')
+                datetime_cols.append(col)
+            except:
+                pass
+
+        if datetime_cols:
+            parts.append("## DATE/TIME COLUMNS")
+            parts.append("-" * 50)
+            for col in datetime_cols[:5]:  # Limit to first 5 date columns
+                try:
+                    date_series = pd.to_datetime(df[col], errors='coerce').dropna()
+                    if len(date_series) > 0:
+                        parts.append(f"\n### {col}")
+                        parts.append(f"    Date Range: {date_series.min()} to {date_series.max()}")
+                        parts.append(f"    Span: {(date_series.max() - date_series.min()).days:,} days")
+                except:
+                    pass
+            parts.append("")
+
+        # Correlation Analysis (for numeric columns)
+        if len(numeric_cols) >= 2:
+            parts.append("## CORRELATION ANALYSIS")
+            parts.append("-" * 50)
+            corr_matrix = df[numeric_cols].corr()
+
+            # Find strong correlations
+            strong_corr = []
+            for i, col1 in enumerate(numeric_cols):
+                for col2 in numeric_cols[i+1:]:
+                    corr_val = corr_matrix.loc[col1, col2]
+                    if abs(corr_val) > 0.5:  # Strong correlation threshold
+                        strong_corr.append((col1, col2, corr_val))
+
+            if strong_corr:
+                strong_corr.sort(key=lambda x: abs(x[2]), reverse=True)
+                parts.append("Strong Correlations (|r| > 0.5):")
+                for col1, col2, corr in strong_corr[:20]:  # Top 20
+                    direction = "positive" if corr > 0 else "negative"
+                    parts.append(f"  • {col1} ↔ {col2}: {corr:.4f} ({direction})")
+            else:
+                parts.append("No strong correlations found between numeric columns.")
+            parts.append("")
+
+        # Data Quality Summary
+        parts.append("## DATA QUALITY SUMMARY")
+        parts.append("-" * 50)
+        total_cells = len(df) * len(df.columns)
+        missing_cells = df.isna().sum().sum()
+        parts.append(f"Total Cells: {total_cells:,}")
+        parts.append(f"Missing Values: {missing_cells:,} ({missing_cells/total_cells*100:.2f}%)")
+        parts.append(f"Complete Rows: {len(df.dropna()):,} ({len(df.dropna())/len(df)*100:.1f}%)")
+
+        # Duplicate detection
+        duplicate_rows = df.duplicated().sum()
+        if duplicate_rows > 0:
+            parts.append(f"Duplicate Rows: {duplicate_rows:,} ({duplicate_rows/len(df)*100:.2f}%)")
+        parts.append("")
+
+        # Sample Data (strategic sampling: head + tail + random)
+        parts.append("## SAMPLE DATA")
+        parts.append("-" * 50)
+
+        # First 5 rows
+        parts.append("\n### First 5 Rows:")
+        for idx, row in df.head(5).iterrows():
+            row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+            parts.append(f"  Row {idx}: {row_text[:500]}{'...' if len(row_text) > 500 else ''}")
+
+        # Last 5 rows
+        if len(df) > 10:
+            parts.append("\n### Last 5 Rows:")
+            for idx, row in df.tail(5).iterrows():
+                row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                parts.append(f"  Row {idx}: {row_text[:500]}{'...' if len(row_text) > 500 else ''}")
+
+        # Random sample (if dataset is large)
+        if len(df) > 100:
+            parts.append("\n### Random Sample (10 rows):")
+            sample_df = df.sample(n=min(10, len(df)), random_state=42)
+            for idx, row in sample_df.iterrows():
+                row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                parts.append(f"  Row {idx}: {row_text[:500]}{'...' if len(row_text) > 500 else ''}")
+
+        parts.append("")
+        parts.append("=" * 50)
+        parts.append(f"END OF {source_name} PROFILE")
+        parts.append("=" * 50)
+
+        return "\n".join(parts)
+
     async def _extract_text_from_bytes(self, content: bytes, filename: str) -> str:
         """Extract text from raw bytes - supports PDF, DOCX, Excel, and CSV"""
         extension = Path(filename).suffix.lower()
@@ -290,88 +477,36 @@ class DocumentProcessor:
                 return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
 
             elif extension in ['.xlsx', '.xls']:
-                # Excel files - use pandas to parse
+                # Excel files - use comprehensive data profiling
                 from io import BytesIO
                 import pandas as pd
 
                 try:
-                    # Read all sheets from Excel file
                     excel_file = pd.ExcelFile(BytesIO(content))
-                    all_text_parts = []
+                    all_profiles = []
 
                     for sheet_name in excel_file.sheet_names:
                         df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                        # Use comprehensive profiling instead of row-by-row dump
+                        profile = self._generate_dataframe_profile(df, f"Excel Sheet: {sheet_name}")
+                        all_profiles.append(profile)
 
-                        # Add sheet header
-                        all_text_parts.append(f"=== Sheet: {sheet_name} ===")
-
-                        # Add column names as context
-                        all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
-
-                        # Add data summary
-                        all_text_parts.append(f"Total rows: {len(df)}")
-
-                        # Convert DataFrame to readable text format
-                        # Include column statistics for numeric columns
-                        numeric_cols = df.select_dtypes(include=['number']).columns
-                        if len(numeric_cols) > 0:
-                            all_text_parts.append("\nNumeric Column Statistics:")
-                            for col in numeric_cols:
-                                stats = df[col].describe()
-                                all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
-
-                        # Convert rows to text (limit to first 1000 rows to avoid huge documents)
-                        all_text_parts.append("\nData:")
-                        max_rows = min(len(df), 1000)
-                        for idx, row in df.head(max_rows).iterrows():
-                            row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                            all_text_parts.append(row_text)
-
-                        if len(df) > max_rows:
-                            all_text_parts.append(f"... and {len(df) - max_rows} more rows")
-
-                        all_text_parts.append("")  # Empty line between sheets
-
-                    return "\n".join(all_text_parts)
+                    return "\n\n".join(all_profiles)
 
                 except Exception as e:
                     self.logger.error(f"Excel parsing failed: {str(e)}")
                     return f"Error parsing Excel file: {str(e)}"
 
             elif extension == '.csv':
-                # CSV files - use pandas to parse
-                from io import BytesIO, StringIO
+                # CSV files - use comprehensive data profiling
+                from io import StringIO
                 import pandas as pd
 
                 try:
-                    # Try to detect encoding
                     text_content = content.decode('utf-8', errors='ignore')
                     df = pd.read_csv(StringIO(text_content))
-
-                    all_text_parts = []
-                    all_text_parts.append(f"=== CSV Data ===")
-                    all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
-                    all_text_parts.append(f"Total rows: {len(df)}")
-
-                    # Add numeric column statistics
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        all_text_parts.append("\nNumeric Column Statistics:")
-                        for col in numeric_cols:
-                            stats = df[col].describe()
-                            all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
-
-                    # Convert rows to text
-                    all_text_parts.append("\nData:")
-                    max_rows = min(len(df), 1000)
-                    for idx, row in df.head(max_rows).iterrows():
-                        row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                        all_text_parts.append(row_text)
-
-                    if len(df) > max_rows:
-                        all_text_parts.append(f"... and {len(df) - max_rows} more rows")
-
-                    return "\n".join(all_text_parts)
+                    # Use comprehensive profiling instead of row-by-row dump
+                    return self._generate_dataframe_profile(df, f"CSV File: {Path(filename).name}")
 
                 except Exception as e:
                     self.logger.error(f"CSV parsing failed: {str(e)}")
@@ -400,67 +535,28 @@ class DocumentProcessor:
             return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
 
         elif extension in ['.xlsx', '.xls']:
-            # Excel files - use pandas
+            # Excel files - use comprehensive data profiling
             import pandas as pd
             try:
                 excel_file = pd.ExcelFile(file_path)
-                all_text_parts = []
+                all_profiles = []
 
                 for sheet_name in excel_file.sheet_names:
                     df = pd.read_excel(excel_file, sheet_name=sheet_name)
-                    all_text_parts.append(f"=== Sheet: {sheet_name} ===")
-                    all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
-                    all_text_parts.append(f"Total rows: {len(df)}")
+                    profile = self._generate_dataframe_profile(df, f"Excel Sheet: {sheet_name}")
+                    all_profiles.append(profile)
 
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        all_text_parts.append("\nNumeric Column Statistics:")
-                        for col in numeric_cols:
-                            stats = df[col].describe()
-                            all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
-
-                    all_text_parts.append("\nData:")
-                    max_rows = min(len(df), 1000)
-                    for idx, row in df.head(max_rows).iterrows():
-                        row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                        all_text_parts.append(row_text)
-
-                    if len(df) > max_rows:
-                        all_text_parts.append(f"... and {len(df) - max_rows} more rows")
-                    all_text_parts.append("")
-
-                return "\n".join(all_text_parts)
+                return "\n\n".join(all_profiles)
             except Exception as e:
                 self.logger.error(f"Excel parsing failed: {str(e)}")
                 return f"Error parsing Excel file: {str(e)}"
 
         elif extension == '.csv':
-            # CSV files - use pandas
+            # CSV files - use comprehensive data profiling
             import pandas as pd
             try:
                 df = pd.read_csv(file_path)
-                all_text_parts = []
-                all_text_parts.append(f"=== CSV Data ===")
-                all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
-                all_text_parts.append(f"Total rows: {len(df)}")
-
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) > 0:
-                    all_text_parts.append("\nNumeric Column Statistics:")
-                    for col in numeric_cols:
-                        stats = df[col].describe()
-                        all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
-
-                all_text_parts.append("\nData:")
-                max_rows = min(len(df), 1000)
-                for idx, row in df.head(max_rows).iterrows():
-                    row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                    all_text_parts.append(row_text)
-
-                if len(df) > max_rows:
-                    all_text_parts.append(f"... and {len(df) - max_rows} more rows")
-
-                return "\n".join(all_text_parts)
+                return self._generate_dataframe_profile(df, f"CSV File: {Path(file_path).name}")
             except Exception as e:
                 self.logger.error(f"CSV parsing failed: {str(e)}")
                 # Fallback to raw text
