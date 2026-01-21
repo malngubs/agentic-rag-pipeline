@@ -275,49 +275,207 @@ class DocumentProcessor:
             return []
     
     async def _extract_text_from_bytes(self, content: bytes, filename: str) -> str:
-        """Extract text from raw bytes"""
+        """Extract text from raw bytes - supports PDF, DOCX, Excel, and CSV"""
         extension = Path(filename).suffix.lower()
-        
+
         try:
             if extension == '.pdf':
                 from io import BytesIO
                 pdf_reader = PyPDF2.PdfReader(BytesIO(content))
                 return "\n\n".join([page.extract_text() for page in pdf_reader.pages])
-            
+
             elif extension == '.docx':
                 from io import BytesIO
                 doc = docx.Document(BytesIO(content))
                 return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-            
+
+            elif extension in ['.xlsx', '.xls']:
+                # Excel files - use pandas to parse
+                from io import BytesIO
+                import pandas as pd
+
+                try:
+                    # Read all sheets from Excel file
+                    excel_file = pd.ExcelFile(BytesIO(content))
+                    all_text_parts = []
+
+                    for sheet_name in excel_file.sheet_names:
+                        df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+                        # Add sheet header
+                        all_text_parts.append(f"=== Sheet: {sheet_name} ===")
+
+                        # Add column names as context
+                        all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
+
+                        # Add data summary
+                        all_text_parts.append(f"Total rows: {len(df)}")
+
+                        # Convert DataFrame to readable text format
+                        # Include column statistics for numeric columns
+                        numeric_cols = df.select_dtypes(include=['number']).columns
+                        if len(numeric_cols) > 0:
+                            all_text_parts.append("\nNumeric Column Statistics:")
+                            for col in numeric_cols:
+                                stats = df[col].describe()
+                                all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
+
+                        # Convert rows to text (limit to first 1000 rows to avoid huge documents)
+                        all_text_parts.append("\nData:")
+                        max_rows = min(len(df), 1000)
+                        for idx, row in df.head(max_rows).iterrows():
+                            row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                            all_text_parts.append(row_text)
+
+                        if len(df) > max_rows:
+                            all_text_parts.append(f"... and {len(df) - max_rows} more rows")
+
+                        all_text_parts.append("")  # Empty line between sheets
+
+                    return "\n".join(all_text_parts)
+
+                except Exception as e:
+                    self.logger.error(f"Excel parsing failed: {str(e)}")
+                    return f"Error parsing Excel file: {str(e)}"
+
+            elif extension == '.csv':
+                # CSV files - use pandas to parse
+                from io import BytesIO, StringIO
+                import pandas as pd
+
+                try:
+                    # Try to detect encoding
+                    text_content = content.decode('utf-8', errors='ignore')
+                    df = pd.read_csv(StringIO(text_content))
+
+                    all_text_parts = []
+                    all_text_parts.append(f"=== CSV Data ===")
+                    all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
+                    all_text_parts.append(f"Total rows: {len(df)}")
+
+                    # Add numeric column statistics
+                    numeric_cols = df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        all_text_parts.append("\nNumeric Column Statistics:")
+                        for col in numeric_cols:
+                            stats = df[col].describe()
+                            all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
+
+                    # Convert rows to text
+                    all_text_parts.append("\nData:")
+                    max_rows = min(len(df), 1000)
+                    for idx, row in df.head(max_rows).iterrows():
+                        row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                        all_text_parts.append(row_text)
+
+                    if len(df) > max_rows:
+                        all_text_parts.append(f"... and {len(df) - max_rows} more rows")
+
+                    return "\n".join(all_text_parts)
+
+                except Exception as e:
+                    self.logger.error(f"CSV parsing failed: {str(e)}")
+                    # Fallback to raw text
+                    return content.decode('utf-8', errors='ignore')
+
             else:
+                # Plain text files (.txt, .md, etc.)
                 return content.decode('utf-8', errors='ignore')
-                
+
         except Exception as e:
             self.logger.error(f"Extraction failed: {str(e)}")
             return content.decode('utf-8', errors='ignore')
     
     async def _extract_text_from_file(self, file_path: str) -> str:
-        """Extract text from file path"""
+        """Extract text from file path - supports PDF, DOCX, Excel, and CSV"""
         extension = Path(file_path).suffix.lower()
-        
+
         if extension == '.pdf':
             with open(file_path, 'rb') as f:
                 pdf = PyPDF2.PdfReader(f)
                 return "\n\n".join([p.extract_text() for p in pdf.pages])
-        
+
         elif extension == '.docx':
             doc = docx.Document(file_path)
             return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-        
+
+        elif extension in ['.xlsx', '.xls']:
+            # Excel files - use pandas
+            import pandas as pd
+            try:
+                excel_file = pd.ExcelFile(file_path)
+                all_text_parts = []
+
+                for sheet_name in excel_file.sheet_names:
+                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                    all_text_parts.append(f"=== Sheet: {sheet_name} ===")
+                    all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
+                    all_text_parts.append(f"Total rows: {len(df)}")
+
+                    numeric_cols = df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        all_text_parts.append("\nNumeric Column Statistics:")
+                        for col in numeric_cols:
+                            stats = df[col].describe()
+                            all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
+
+                    all_text_parts.append("\nData:")
+                    max_rows = min(len(df), 1000)
+                    for idx, row in df.head(max_rows).iterrows():
+                        row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                        all_text_parts.append(row_text)
+
+                    if len(df) > max_rows:
+                        all_text_parts.append(f"... and {len(df) - max_rows} more rows")
+                    all_text_parts.append("")
+
+                return "\n".join(all_text_parts)
+            except Exception as e:
+                self.logger.error(f"Excel parsing failed: {str(e)}")
+                return f"Error parsing Excel file: {str(e)}"
+
+        elif extension == '.csv':
+            # CSV files - use pandas
+            import pandas as pd
+            try:
+                df = pd.read_csv(file_path)
+                all_text_parts = []
+                all_text_parts.append(f"=== CSV Data ===")
+                all_text_parts.append(f"Columns: {', '.join(df.columns.astype(str))}")
+                all_text_parts.append(f"Total rows: {len(df)}")
+
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    all_text_parts.append("\nNumeric Column Statistics:")
+                    for col in numeric_cols:
+                        stats = df[col].describe()
+                        all_text_parts.append(f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}")
+
+                all_text_parts.append("\nData:")
+                max_rows = min(len(df), 1000)
+                for idx, row in df.head(max_rows).iterrows():
+                    row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                    all_text_parts.append(row_text)
+
+                if len(df) > max_rows:
+                    all_text_parts.append(f"... and {len(df) - max_rows} more rows")
+
+                return "\n".join(all_text_parts)
+            except Exception as e:
+                self.logger.error(f"CSV parsing failed: {str(e)}")
+                # Fallback to raw text
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read()
+
         else:
-            # Plain text
+            # Plain text files
             for encoding in ['utf-8', 'latin-1', 'cp1252']:
                 try:
                     with open(file_path, 'r', encoding=encoding) as f:
                         return f.read()
                 except UnicodeDecodeError:
                     continue
-            
+
             # Fallback
             with open(file_path, 'rb') as f:
                 return f.read().decode('utf-8', errors='ignore')
