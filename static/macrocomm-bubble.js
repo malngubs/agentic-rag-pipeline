@@ -17,7 +17,7 @@ class MacrocommBubbleChatbot {
         this.config = {
             position: config.position || 'bottom-right',
             theme: config.theme || 'light',
-            apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8001',
+            apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8000',  // Match backend port
             primaryColor: config.primaryColor || '#FF6E00',
             secondaryColor: config.secondaryColor || '#FF923F',
             enableStreaming: config.enableStreaming !== false, // Default: true
@@ -1260,12 +1260,12 @@ class MacrocommBubbleChatbot {
     }
 
     openDashboard() {
-        // Open BI Platform in new tab
-        const biPlatformUrl = 'http://localhost:3000';
+        // Open BI Platform Chat page in new tab (not dashboards)
+        const biPlatformUrl = 'http://localhost:3000/chat';
         window.open(biPlatformUrl, '_blank');
 
-        // Optional: Show notification that dashboard is opening
-        this.addBotMessage('🎨 Opening BI Platform dashboard in a new tab...');
+        // Optional: Show notification that BI Platform is opening
+        this.addBotMessage('🚀 Opening BI Platform in your browser...');
     }
 
     updateStatus(status) {
@@ -1351,7 +1351,7 @@ if (document.readyState === 'loading') {
 
 function initMacrocommChat() {
     macrocommChat = new MacrocommBubbleChatbot({
-        apiBaseUrl: 'http://localhost:8001', // Change to your server URL
+        apiBaseUrl: 'http://localhost:8000',  // Backend API port (matches uvicorn)
         enableStreaming: true,
         enableVoice: true,
         enableFollowUps: true
