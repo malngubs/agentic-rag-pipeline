@@ -17,7 +17,7 @@ class MacrocommBubbleChatbot {
         this.config = {
             position: config.position || 'bottom-right',
             theme: config.theme || 'light',
-            apiBaseUrl: config.apiBaseUrl || 'ws://localhost:8000',  // Match backend port
+            apiBaseUrl: config.apiBaseUrl || 'http://localhost:8000',  // Backend URL (http:// -> ws:// for WebSocket)
             primaryColor: config.primaryColor || '#FF6E00',
             secondaryColor: config.secondaryColor || '#FF923F',
             enableStreaming: config.enableStreaming !== false, // Default: true

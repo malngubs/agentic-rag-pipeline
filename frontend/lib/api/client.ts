@@ -24,6 +24,24 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
+// Debug mode - enable verbose logging
+const DEBUG = process.env.NEXT_PUBLIC_DEBUG === 'true';
+
+// Debug logger
+const debug = {
+  log: (...args: any[]) => DEBUG && console.log('[API Client]', ...args),
+  error: (...args: any[]) => console.error('[API Client]', ...args),
+  warn: (...args: any[]) => console.warn('[API Client]', ...args),
+};
+
+// Log configuration on load (always, for troubleshooting)
+if (typeof window !== 'undefined') {
+  console.log('🔧 Macrocomm API Client Configuration:');
+  console.log('   API URL:', API_BASE_URL);
+  console.log('   WebSocket URL:', WS_BASE_URL);
+  console.log('   Debug Mode:', DEBUG ? 'ENABLED' : 'disabled');
+}
+
 // Default request options
 const defaultHeaders: HeadersInit = {
   'Content-Type': 'application/json',
@@ -101,26 +119,31 @@ async function uploadFile<T>(
   additionalData?: Record<string, string>,
   onProgress?: (progress: number) => void
 ): Promise<T> {
+  const uploadUrl = `${API_BASE_URL}${endpoint}`;
+  debug.log(`📤 Uploading file: ${file.name} (${file.size} bytes) to ${uploadUrl}`);
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('file', file);
-    
+
     // Add any additional form data
     if (additionalData) {
       Object.entries(additionalData).forEach(([key, value]) => {
         formData.append(key, value);
       });
     }
-    
+
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable && onProgress) {
         const progress = Math.round((event.loaded / event.total) * 100);
+        debug.log(`📤 Upload progress: ${progress}%`);
         onProgress(progress);
       }
     });
-    
+
     xhr.addEventListener('load', () => {
+      debug.log(`📤 Upload complete. Status: ${xhr.status}`);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(JSON.parse(xhr.responseText));
@@ -128,15 +151,23 @@ async function uploadFile<T>(
           resolve(xhr.responseText as unknown as T);
         }
       } else {
+        debug.error(`📤 Upload failed with status ${xhr.status}: ${xhr.statusText}`);
         reject(new ApiError(xhr.status, xhr.statusText));
       }
     });
-    
-    xhr.addEventListener('error', () => {
+
+    xhr.addEventListener('error', (event) => {
+      debug.error(`📤 Upload network error. URL: ${uploadUrl}`, event);
+      debug.error('💡 Check: 1) Backend running on port 8000? 2) CORS enabled? 3) Firewall?');
       reject(new ApiError(0, 'Network error'));
     });
-    
-    xhr.open('POST', `${API_BASE_URL}${endpoint}`);
+
+    xhr.addEventListener('abort', () => {
+      debug.warn('📤 Upload aborted');
+      reject(new ApiError(0, 'Upload aborted'));
+    });
+
+    xhr.open('POST', uploadUrl);
     xhr.send(formData);
   });
 }
@@ -228,10 +259,12 @@ export class ChatWebSocket {
       try {
         // Connect to the streaming WebSocket endpoint
         const wsUrl = `${WS_BASE_URL}/ws/chat/stream`;
+        debug.log(`🔌 Connecting to WebSocket: ${wsUrl}`);
         this.ws = new WebSocket(wsUrl);
-        
+
         this.ws.onopen = () => {
-          console.log('✅ WebSocket connected to backend');
+          console.log('✅ WebSocket connected to backend:', wsUrl);
+          debug.log('🔌 WebSocket connection established successfully');
           this.reconnectAttempts = 0;
           resolve();
         };
@@ -299,19 +332,23 @@ export class ChatWebSocket {
         };
         
         this.ws.onerror = (event) => {
-          console.error('❌ WebSocket error:', event);
+          debug.error('❌ WebSocket error:', event);
+          debug.error('💡 Check: 1) Backend running? 2) Port 8000 accessible? 3) Firewall?');
+          debug.error(`   Attempted URL: ${WS_BASE_URL}/ws/chat/stream`);
           this.onError(new Error('WebSocket connection error'));
+          reject(new Error('WebSocket connection error'));
         };
-        
+
         this.ws.onclose = (event) => {
-          console.log('🔌 WebSocket closed:', event.code, event.reason);
+          debug.log(`🔌 WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'none'}, Clean: ${event.wasClean}`);
           if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`🔄 Reconnecting... attempt ${this.reconnectAttempts}`);
+            debug.log(`🔄 Reconnecting... attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
             setTimeout(() => this.connect(), 1000 * this.reconnectAttempts);
           }
         };
       } catch (e) {
+        debug.error('❌ Failed to create WebSocket:', e);
         reject(e);
       }
     });
