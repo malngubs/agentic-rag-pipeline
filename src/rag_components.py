@@ -567,22 +567,23 @@ class VectorStoreManager:
         except Exception as e:
             self.logger.error(f"Indexing failed: {str(e)}")
             return {"success": False, "error": str(e)}
-    
+
     async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.3) -> List[Dict[str, Any]]:
         """Search vector store"""
         try:
             query_embedding = await self._generate_embedding(query_text)
-            
+
+            # Use 'search' method which is compatible with qdrant-client 1.6.x
             results = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.client.query_points(
+                lambda: self.client.search(
                     collection_name=self.config.vector_collection_name,
-                    query=query_embedding,
+                    query_vector=query_embedding,
                     limit=limit,
                     score_threshold=score_threshold
-                ).points
+                )
             )
-            
+
             return [{
                 "text": hit.payload["content"],
                 "source": hit.payload.get("source_file", ""),
@@ -590,7 +591,7 @@ class VectorStoreManager:
                 "chunk_id": hit.id,
                 "doc_id": hit.payload.get("doc_id", "")
             } for hit in results]
-            
+
         except Exception as e:
             self.logger.error(f"Search failed: {str(e)}")
             return []
