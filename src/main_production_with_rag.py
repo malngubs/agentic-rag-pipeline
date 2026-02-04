@@ -145,6 +145,16 @@ except ImportError:
     SCOPES_AVAILABLE = False
     logging.warning("⚠️ document_scopes.py not found - document scopes disabled")
 
+# ✨ UNIFIED DATASET MANAGER - Upload once, use everywhere
+try:
+    from dataset_manager import DatasetManager, get_dataset_manager
+    DATASET_MANAGER_AVAILABLE = True
+except ImportError:
+    DATASET_MANAGER_AVAILABLE = False
+    DatasetManager = None
+    get_dataset_manager = None
+    logging.warning("⚠️ dataset_manager.py not found - unified datasets disabled")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -499,14 +509,22 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("🚀 Starting Agentic RAG Pipeline with Phase 1 Features...")
     await app_state.initialize_components()
-    
+
+    # Initialize Unified Dataset Manager
+    if DATASET_MANAGER_AVAILABLE:
+        dataset_mgr = get_dataset_manager()
+        if app_state.rag_status.get('initialized', False):
+            dataset_mgr.set_rag_system(app_state.rag_system)
+            logger.info("📊 Dataset Manager connected to RAG system")
+        app.state.dataset_manager = dataset_mgr
+
     # Store state in app for access
     app.state.app_state = app_state
     app.state.connection_manager = app_state.connection_manager
-    
+
     logger.info("✅ Application startup complete!")
     yield
-    
+
     # Shutdown
     logger.info("🔄 Shutting down...")
     await app_state.rag_system.close()
@@ -1079,6 +1097,235 @@ async def upload_document(
     except Exception as e:
         logger.error(f"💥 Upload error: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Document upload failed: {str(e)}")
+
+
+# =============================================================================
+# 📊 UNIFIED DATASET MANAGEMENT (Upload Once, Use Everywhere)
+# =============================================================================
+
+class DatasetUploadResponse(BaseModel):
+    """Response for dataset upload"""
+    success: bool
+    dataset_id: str
+    filename: str
+    file_size: int
+    file_type: str
+    row_count: int = 0
+    column_count: int = 0
+    columns: List[Dict[str, Any]] = []
+    vector_chunks: int = 0
+    is_active: bool = False
+    message: str = ""
+
+
+class DatasetListResponse(BaseModel):
+    """Response for listing datasets"""
+    datasets: List[Dict[str, Any]]
+    total: int
+    active_dataset_id: Optional[str] = None
+
+
+class SetActiveDatasetRequest(BaseModel):
+    """Request to set active dataset"""
+    dataset_id: str
+
+
+@app.post("/api/datasets/upload", response_model=DatasetUploadResponse, tags=["Datasets"])
+async def upload_dataset(file: UploadFile = File(...)):
+    """
+    Upload a dataset for use across all BI Platform features.
+    The dataset will be:
+    - Parsed into a DataFrame (for Analysis, Statistics, Forecasting)
+    - Indexed into vector store (for Chat/RAG queries)
+    - Set as active dataset if first upload
+    """
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+
+    try:
+        # Validation
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        supported_types = {'.pdf', '.docx', '.txt', '.xlsx', '.xls', '.csv', '.json'}
+        extension = Path(file.filename).suffix.lower()
+
+        if extension not in supported_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{extension}'. Supported: {supported_types}"
+            )
+
+        # Read file content
+        content = await file.read()
+
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        if len(content) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File size exceeds 100MB limit")
+
+        # Upload and process dataset
+        metadata = await dataset_mgr.upload_dataset(content, file.filename)
+
+        return DatasetUploadResponse(
+            success=metadata.status.value == "ready",
+            dataset_id=metadata.id,
+            filename=metadata.original_filename,
+            file_size=metadata.file_size,
+            file_type=metadata.file_type,
+            row_count=metadata.row_count,
+            column_count=metadata.column_count,
+            columns=[c.__dict__ for c in metadata.columns[:20]],  # Limit columns in response
+            vector_chunks=metadata.vector_chunks,
+            is_active=dataset_mgr._active_dataset_id == metadata.id,
+            message=f"Dataset '{file.filename}' uploaded successfully. Ready for all features!"
+            if metadata.status.value == "ready"
+            else f"Upload failed: {metadata.error_message}"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dataset upload error: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Dataset upload failed: {str(e)}")
+
+
+@app.get("/api/datasets", response_model=DatasetListResponse, tags=["Datasets"])
+async def list_datasets():
+    """List all uploaded datasets"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    datasets = dataset_mgr.list_datasets()
+
+    return DatasetListResponse(
+        datasets=datasets,
+        total=len(datasets),
+        active_dataset_id=dataset_mgr._active_dataset_id
+    )
+
+
+@app.get("/api/datasets/active", tags=["Datasets"])
+async def get_active_dataset():
+    """Get the currently active dataset"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    active = dataset_mgr.get_active_dataset()
+
+    if not active:
+        return JSONResponse(content={"active": False, "message": "No dataset uploaded yet"})
+
+    return JSONResponse(content={
+        "active": True,
+        "dataset": active.to_dict(),
+        "is_tabular": active.file_type in ['excel', 'csv', 'json', 'parquet']
+    })
+
+
+@app.post("/api/datasets/active", tags=["Datasets"])
+async def set_active_dataset(request: SetActiveDatasetRequest):
+    """Set the active dataset for all features"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    success = dataset_mgr.set_active_dataset(request.dataset_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    active = dataset_mgr.get_active_dataset()
+    return JSONResponse(content={
+        "success": True,
+        "active_dataset": active.to_dict() if active else None
+    })
+
+
+@app.get("/api/datasets/{dataset_id}", tags=["Datasets"])
+async def get_dataset(dataset_id: str):
+    """Get details for a specific dataset"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    dataset = dataset_mgr.get_dataset(dataset_id)
+
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return JSONResponse(content=dataset.to_dict())
+
+
+@app.delete("/api/datasets/{dataset_id}", tags=["Datasets"])
+async def delete_dataset(dataset_id: str):
+    """Delete a dataset"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    success = dataset_mgr.delete_dataset(dataset_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return JSONResponse(content={"success": True, "deleted": dataset_id})
+
+
+@app.get("/api/datasets/{dataset_id}/data", tags=["Datasets"])
+async def get_dataset_data(
+    dataset_id: str,
+    offset: int = 0,
+    limit: int = 100,
+    columns: Optional[str] = None
+):
+    """Get the actual data from a dataset (paginated)"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    df = dataset_mgr.get_dataframe(dataset_id)
+
+    if df is None:
+        raise HTTPException(status_code=404, detail="Dataset not found or is not tabular")
+
+    # Filter columns if specified
+    if columns:
+        col_list = [c.strip() for c in columns.split(",")]
+        available_cols = [c for c in col_list if c in df.columns]
+        if available_cols:
+            df = df[available_cols]
+
+    # Paginate
+    total_rows = len(df)
+    df_slice = df.iloc[offset:offset + limit]
+
+    # Convert to JSON-serializable format
+    data = df_slice.replace({np.nan: None}).to_dict(orient='records')
+
+    return JSONResponse(content={
+        "data": data,
+        "total_rows": total_rows,
+        "offset": offset,
+        "limit": limit,
+        "columns": list(df.columns)
+    })
+
+
+@app.get("/api/datasets/stats", tags=["Datasets"])
+async def get_dataset_stats():
+    """Get dataset manager statistics"""
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    dataset_mgr = get_dataset_manager()
+    return JSONResponse(content=dataset_mgr.get_stats())
+
 
 # =============================================================================
 # 📄 DOCUMENT MANAGEMENT ENDPOINTS

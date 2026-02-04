@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { useUIStore, useSessionStore } from '@/lib/stores';
 import { ThemeSelector, useTheme } from '@/components/providers/ThemeProvider';
+import { DatasetSelector } from '@/components/datasets/DatasetSelector';
 
 // =============================================================================
 // NAVIGATION ITEMS
@@ -384,6 +385,23 @@ export const Sidebar: React.FC = () => {
                 className="w-full pl-9 pr-4 py-2 bg-surface border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-muted focus:outline-none focus:ring-2 focus:ring-brand-600/50 focus:border-brand-600"
               />
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Dataset selector (when expanded) */}
+      <AnimatePresence>
+        {!sidebarCollapsed && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="px-3 pb-3 overflow-hidden"
+          >
+            <div className="text-xs font-medium text-foreground-muted uppercase tracking-wider mb-2">
+              Active Dataset
+            </div>
+            <DatasetSelector compact />
           </motion.div>
         )}
       </AnimatePresence>

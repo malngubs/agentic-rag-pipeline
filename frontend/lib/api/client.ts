@@ -1193,6 +1193,191 @@ export async function checkApiHealth(): Promise<boolean> {
 }
 
 // =============================================================================
+// 📊 UNIFIED DATASET API (Upload Once, Use Everywhere)
+// =============================================================================
+
+export interface DatasetMetadata {
+  id: string;
+  filename: string;
+  original_filename: string;
+  file_size: number;
+  file_type: string;
+  upload_time: string;
+  status: 'pending' | 'processing' | 'ready' | 'error';
+  row_count: number;
+  column_count: number;
+  columns: Array<{
+    name: string;
+    dtype: string;
+    non_null_count: number;
+    null_count: number;
+    unique_count: number;
+    sample_values: any[];
+    min_value?: number;
+    max_value?: number;
+    mean_value?: number;
+    top_values?: Array<[string, number]>;
+  }>;
+  sheets?: string[];
+  vector_chunks: number;
+  is_active?: boolean;
+  error_message?: string;
+}
+
+export interface DatasetUploadResponse {
+  success: boolean;
+  dataset_id: string;
+  filename: string;
+  file_size: number;
+  file_type: string;
+  row_count: number;
+  column_count: number;
+  columns: any[];
+  vector_chunks: number;
+  is_active: boolean;
+  message: string;
+}
+
+export interface DatasetListResponse {
+  datasets: DatasetMetadata[];
+  total: number;
+  active_dataset_id: string | null;
+}
+
+export const datasetApi = {
+  /**
+   * Upload a dataset for use across all features
+   * Endpoint: POST /api/datasets/upload
+   */
+  async upload(
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<DatasetUploadResponse> {
+    debug.log(`📤 Uploading dataset: ${file.name}`);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          onProgress(progress);
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const response = JSON.parse(xhr.responseText);
+          debug.log('✅ Dataset upload successful:', response);
+          resolve(response);
+        } else {
+          const error = JSON.parse(xhr.responseText);
+          debug.error('❌ Dataset upload failed:', error);
+          reject(new ApiError(xhr.status, error.detail || 'Upload failed', error));
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        debug.error('❌ Dataset upload network error');
+        reject(new Error('Network error during upload'));
+      });
+
+      xhr.open('POST', `${API_BASE_URL}/api/datasets/upload`);
+      xhr.send(formData);
+    });
+  },
+
+  /**
+   * List all uploaded datasets
+   * Endpoint: GET /api/datasets
+   */
+  async list(): Promise<DatasetListResponse> {
+    debug.log('📋 Fetching dataset list');
+    return get<DatasetListResponse>('/api/datasets');
+  },
+
+  /**
+   * Get the active dataset
+   * Endpoint: GET /api/datasets/active
+   */
+  async getActive(): Promise<{ active: boolean; dataset?: DatasetMetadata; is_tabular?: boolean }> {
+    debug.log('📌 Fetching active dataset');
+    return get('/api/datasets/active');
+  },
+
+  /**
+   * Set the active dataset
+   * Endpoint: POST /api/datasets/active
+   */
+  async setActive(datasetId: string): Promise<{ success: boolean; active_dataset?: DatasetMetadata }> {
+    debug.log(`📌 Setting active dataset: ${datasetId}`);
+    return post('/api/datasets/active', { dataset_id: datasetId });
+  },
+
+  /**
+   * Get details for a specific dataset
+   * Endpoint: GET /api/datasets/{dataset_id}
+   */
+  async get(datasetId: string): Promise<DatasetMetadata> {
+    debug.log(`📊 Fetching dataset: ${datasetId}`);
+    return get(`/api/datasets/${datasetId}`);
+  },
+
+  /**
+   * Delete a dataset
+   * Endpoint: DELETE /api/datasets/{dataset_id}
+   */
+  async delete(datasetId: string): Promise<{ success: boolean; deleted: string }> {
+    debug.log(`🗑️ Deleting dataset: ${datasetId}`);
+    return del(`/api/datasets/${datasetId}`);
+  },
+
+  /**
+   * Get dataset data (paginated)
+   * Endpoint: GET /api/datasets/{dataset_id}/data
+   */
+  async getData(
+    datasetId: string,
+    offset: number = 0,
+    limit: number = 100,
+    columns?: string[]
+  ): Promise<{
+    data: any[];
+    total_rows: number;
+    offset: number;
+    limit: number;
+    columns: string[];
+  }> {
+    debug.log(`📊 Fetching data for dataset: ${datasetId}`);
+    const params: Record<string, string> = {
+      offset: offset.toString(),
+      limit: limit.toString(),
+    };
+    if (columns && columns.length > 0) {
+      params.columns = columns.join(',');
+    }
+    return get(`/api/datasets/${datasetId}/data`, params);
+  },
+
+  /**
+   * Get dataset manager statistics
+   * Endpoint: GET /api/datasets/stats
+   */
+  async getStats(): Promise<{
+    total_datasets: number;
+    active_dataset_id: string | null;
+    active_dataset_name: string | null;
+    total_rows: number;
+    total_vector_chunks: number;
+  }> {
+    debug.log('📈 Fetching dataset stats');
+    return get('/api/datasets/stats');
+  },
+};
+
+// =============================================================================
 // DEFAULT EXPORT
 // =============================================================================
 
@@ -1206,6 +1391,7 @@ export const api = {
   collaboration: collaborationApi,
   transform: transformApi,
   nlQuery: nlQueryApi,
+  dataset: datasetApi,
   checkHealth,
   checkApiHealth,
   ChatWebSocket,
