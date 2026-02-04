@@ -551,15 +551,16 @@ export default function DashboardsPage() {
     addDashboard(newDashboard);
     setCurrentDashboard(newDashboard);
 
-    // Navigate to chat to start building the dashboard with AI
-    router.push(`/chat?dashboard=${newDashboard.id}`);
-  }, [addDashboard, setCurrentDashboard, router]);
+    // Stay on dashboards page - dashboard is now visible in the list
+    // Close the create modal (handled by parent component)
+  }, [addDashboard, setCurrentDashboard]);
 
   // Handle edit dashboard
   const handleEdit = useCallback((dashboard: DashboardData) => {
     setCurrentDashboard(dashboard);
-    router.push(`/chat?dashboard=${dashboard.id}`);
-  }, [setCurrentDashboard, router]);
+    // Stay on dashboards page for now
+    // TODO: Navigate to dedicated dashboard editor when available
+  }, [setCurrentDashboard]);
 
   // Handle duplicate dashboard
   const handleDuplicate = useCallback((dashboard: DashboardData) => {

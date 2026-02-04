@@ -277,21 +277,107 @@ class DocumentProcessor:
     async def _extract_text_from_bytes(self, content: bytes, filename: str) -> str:
         """Extract text from raw bytes"""
         extension = Path(filename).suffix.lower()
-        
+
         try:
             if extension == '.pdf':
                 from io import BytesIO
                 pdf_reader = PyPDF2.PdfReader(BytesIO(content))
                 return "\n\n".join([page.extract_text() for page in pdf_reader.pages])
-            
+
             elif extension == '.docx':
                 from io import BytesIO
                 doc = docx.Document(BytesIO(content))
                 return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-            
+
+            elif extension in ['.xlsx', '.xls']:
+                # Excel files - use pandas to read and convert to structured text
+                from io import BytesIO
+                import pandas as pd
+
+                try:
+                    # Read all sheets from Excel file
+                    excel_file = pd.ExcelFile(BytesIO(content))
+                    all_text = []
+
+                    for sheet_name in excel_file.sheet_names:
+                        df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+                        # Add sheet header
+                        all_text.append(f"=== Sheet: {sheet_name} ===")
+                        all_text.append(f"Rows: {len(df)}, Columns: {len(df.columns)}")
+                        all_text.append(f"Column names: {', '.join(df.columns.astype(str))}")
+                        all_text.append("")
+
+                        # Convert DataFrame to readable text format
+                        # Include column statistics for numeric columns
+                        for col in df.columns:
+                            col_data = df[col]
+                            dtype = str(col_data.dtype)
+                            non_null = col_data.notna().sum()
+
+                            if pd.api.types.is_numeric_dtype(col_data):
+                                stats = f"min={col_data.min()}, max={col_data.max()}, mean={col_data.mean():.2f}"
+                                all_text.append(f"Column '{col}' ({dtype}): {non_null} values, {stats}")
+                            else:
+                                unique = col_data.nunique()
+                                all_text.append(f"Column '{col}' ({dtype}): {non_null} values, {unique} unique")
+
+                        all_text.append("")
+
+                        # Include sample data (first 50 rows as CSV-like format)
+                        all_text.append("Sample data:")
+                        sample_df = df.head(50)
+                        all_text.append(sample_df.to_string(index=False))
+                        all_text.append("")
+
+                    result = "\n".join(all_text)
+                    self.logger.info(f"Extracted {len(result)} chars from Excel file with {len(excel_file.sheet_names)} sheets")
+                    return result
+
+                except Exception as excel_error:
+                    self.logger.error(f"Excel parsing failed: {excel_error}")
+                    return f"Excel file: {filename} (parsing failed: {str(excel_error)})"
+
+            elif extension == '.csv':
+                # CSV files - parse with pandas for structured extraction
+                from io import BytesIO
+                import pandas as pd
+
+                try:
+                    df = pd.read_csv(BytesIO(content))
+                    all_text = []
+
+                    all_text.append(f"=== CSV Data ===")
+                    all_text.append(f"Rows: {len(df)}, Columns: {len(df.columns)}")
+                    all_text.append(f"Column names: {', '.join(df.columns.astype(str))}")
+                    all_text.append("")
+
+                    # Column info
+                    for col in df.columns:
+                        col_data = df[col]
+                        dtype = str(col_data.dtype)
+                        non_null = col_data.notna().sum()
+
+                        if pd.api.types.is_numeric_dtype(col_data):
+                            stats = f"min={col_data.min()}, max={col_data.max()}, mean={col_data.mean():.2f}"
+                            all_text.append(f"Column '{col}' ({dtype}): {non_null} values, {stats}")
+                        else:
+                            unique = col_data.nunique()
+                            all_text.append(f"Column '{col}' ({dtype}): {non_null} values, {unique} unique")
+
+                    all_text.append("")
+                    all_text.append("Sample data:")
+                    all_text.append(df.head(50).to_string(index=False))
+
+                    return "\n".join(all_text)
+
+                except Exception as csv_error:
+                    self.logger.warning(f"CSV pandas parsing failed, falling back to text: {csv_error}")
+                    return content.decode('utf-8', errors='ignore')
+
             else:
                 return content.decode('utf-8', errors='ignore')
-                
+
         except Exception as e:
             self.logger.error(f"Extraction failed: {str(e)}")
             return content.decode('utf-8', errors='ignore')

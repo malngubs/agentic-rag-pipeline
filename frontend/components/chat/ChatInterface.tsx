@@ -27,7 +27,9 @@ import {
   Paperclip,
   X,
   Loader2,
-  Sparkles,
+  BrainCircuit,
+  Wand2,
+  Lightbulb,
   BarChart3,
   FileSpreadsheet,
   MessageSquare,
@@ -468,7 +470,7 @@ const EmptyState: React.FC<EmptyStateProps> = ({ onSuggestionClick, onUploadClic
       query: 'Create a dashboard with key metrics',
     },
     {
-      icon: Sparkles,
+      icon: Lightbulb,
       title: 'Get insights',
       description: '"What are the key insights from this data?"',
       query: 'What are the key insights from this data?',
@@ -515,7 +517,7 @@ const EmptyState: React.FC<EmptyStateProps> = ({ onSuggestionClick, onUploadClic
       {/* Logo/Title */}
       <div className="text-center mb-10 animate-fade-in">
         <div className="w-20 h-20 rounded-2xl glass-brand flex items-center justify-center mx-auto mb-6 card-glow">
-          <Sparkles className="w-10 h-10 text-[var(--color-brand-500)]" />
+          <BrainCircuit className="w-10 h-10 text-[var(--color-brand-500)]" />
         </div>
         <h1 className="text-3xl font-bold text-[var(--color-foreground)] mb-3">
           Macrocomm BI Assistant
@@ -926,7 +928,7 @@ export const ChatInterface: React.FC = () => {
       <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] glass">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl glass-brand flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-[var(--color-brand-500)]" />
+            <Wand2 className="w-5 h-5 text-[var(--color-brand-500)]" />
           </div>
           <div>
             <h2 className="font-semibold text-[var(--color-foreground)]">AI Assistant</h2>
