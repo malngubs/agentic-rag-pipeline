@@ -634,8 +634,18 @@ export const sessionApi = {
     sessionId: string,
     file: File,
     onProgress?: (progress: number) => void
-  ): Promise<{ success: boolean; file_name: string; rows: number; columns: number }> {
+  ): Promise<{ success: boolean; file_name: string; rows: number; columns: number; dataset_id?: string }> {
     return uploadFile(`/api/sessions/${sessionId}/upload`, file, undefined, onProgress);
+  },
+
+  /**
+   * Load active dataset from DatasetManager into session
+   * Endpoint: POST /api/sessions/{id}/load-active-dataset
+   */
+  async loadActiveDataset(
+    sessionId: string
+  ): Promise<{ success: boolean; message: string; file_name: string; rows: number; columns: number; dataset_id: string }> {
+    return post(`/api/sessions/${sessionId}/load-active-dataset`, {});
   },
 
   /**

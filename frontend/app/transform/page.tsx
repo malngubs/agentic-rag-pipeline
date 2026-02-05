@@ -734,14 +734,26 @@ export default function TransformPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize session
+  // Initialize session - auto-loads active dataset if available
   useEffect(() => {
     const initSession = async () => {
       try {
         const newSession = await api.session.create();
         setSession(newSession);
+
+        // If data was auto-loaded from active dataset, also load profile
+        if (newSession.data_loaded && newSession.file_name) {
+          console.log(`📊 Auto-loaded active dataset: ${newSession.file_name}`);
+          try {
+            const profileData = await api.session.getProfile(newSession.id);
+            setProfile(profileData);
+          } catch (profileErr) {
+            console.warn('Could not load profile:', profileErr);
+          }
+        }
       } catch (err) {
         console.error('Failed to create session:', err);
+        setError('Failed to initialize session');
       }
     };
     initSession();

@@ -2996,7 +2996,7 @@ class ExportRequest(BaseModel):
 
 @app.post("/api/sessions", response_model=SessionResponse, tags=["Data Analysis"])
 async def create_analysis_session(request: SessionCreateRequest = None):
-    """Create a new data analysis session"""
+    """Create a new data analysis session - auto-loads active dataset if available"""
     if not DATA_ANALYST_AVAILABLE:
         raise HTTPException(status_code=503, detail="Data analyst module not available")
 
@@ -3018,12 +3018,30 @@ async def create_analysis_session(request: SessionCreateRequest = None):
         }
         _session_orchestrators[session_id] = orchestrator
 
+        # Auto-load active dataset from DatasetManager if available
+        if DATASET_MANAGER_AVAILABLE:
+            dataset_mgr = get_dataset_manager()
+            active_df = dataset_mgr.get_active_dataframe()
+            active_meta = dataset_mgr.get_active_dataset()
+
+            if active_df is not None and active_meta is not None:
+                _analysis_sessions[session_id]["data"] = active_df
+                _analysis_sessions[session_id]["data_loaded"] = True
+                _analysis_sessions[session_id]["file_name"] = active_meta.original_filename
+                _analysis_sessions[session_id]["row_count"] = len(active_df)
+                _analysis_sessions[session_id]["column_count"] = len(active_df.columns)
+                _analysis_sessions[session_id]["dataset_id"] = active_meta.id
+                logger.info(f"📊 Auto-loaded active dataset '{active_meta.original_filename}' into session {session_id}")
+
         logger.info(f"📊 Created analysis session: {session_id}")
 
         return SessionResponse(
             id=session_id,
             created_at=_analysis_sessions[session_id]["created_at"],
-            data_loaded=False
+            data_loaded=_analysis_sessions[session_id]["data_loaded"],
+            file_name=_analysis_sessions[session_id].get("file_name"),
+            row_count=_analysis_sessions[session_id].get("row_count"),
+            column_count=_analysis_sessions[session_id].get("column_count"),
         )
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
@@ -3047,9 +3065,52 @@ async def get_analysis_session(session_id: str):
     )
 
 
+@app.post("/api/sessions/{session_id}/load-active-dataset", tags=["Data Analysis"])
+async def load_active_dataset_to_session(session_id: str):
+    """Load the active dataset from DatasetManager into the session"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not DATASET_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+
+    try:
+        dataset_mgr = get_dataset_manager()
+        active_df = dataset_mgr.get_active_dataframe()
+        active_meta = dataset_mgr.get_active_dataset()
+
+        if active_df is None or active_meta is None:
+            raise HTTPException(status_code=404, detail="No active dataset available. Please upload a dataset first.")
+
+        # Update session with active dataset
+        _analysis_sessions[session_id]["data"] = active_df
+        _analysis_sessions[session_id]["data_loaded"] = True
+        _analysis_sessions[session_id]["file_name"] = active_meta.original_filename
+        _analysis_sessions[session_id]["row_count"] = len(active_df)
+        _analysis_sessions[session_id]["column_count"] = len(active_df.columns)
+        _analysis_sessions[session_id]["dataset_id"] = active_meta.id
+
+        logger.info(f"📊 Loaded active dataset '{active_meta.original_filename}' into session {session_id}")
+
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Loaded dataset '{active_meta.original_filename}'",
+            "file_name": active_meta.original_filename,
+            "rows": len(active_df),
+            "columns": len(active_df.columns),
+            "dataset_id": active_meta.id
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load active dataset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/sessions/{session_id}/upload", tags=["Data Analysis"])
 async def upload_session_file(session_id: str, file: UploadFile = File(...)):
-    """Upload a file to the analysis session"""
+    """Upload a file to the analysis session - also adds to unified DatasetManager"""
     if session_id not in _analysis_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -3082,6 +3143,18 @@ async def upload_session_file(session_id: str, file: UploadFile = File(...)):
         _analysis_sessions[session_id]["row_count"] = len(df)
         _analysis_sessions[session_id]["column_count"] = len(df.columns)
 
+        # Also add to DatasetManager for cross-feature access
+        dataset_id = None
+        if DATASET_MANAGER_AVAILABLE:
+            try:
+                dataset_mgr = get_dataset_manager()
+                metadata = await dataset_mgr.upload_dataset(content, file.filename)
+                dataset_id = metadata.id
+                _analysis_sessions[session_id]["dataset_id"] = dataset_id
+                logger.info(f"📊 Also added to DatasetManager: {dataset_id}")
+            except Exception as dm_err:
+                logger.warning(f"Failed to add to DatasetManager: {dm_err}")
+
         logger.info(f"📊 Uploaded file to session {session_id}: {file.filename} ({len(df)} rows)")
 
         return {
@@ -3089,7 +3162,8 @@ async def upload_session_file(session_id: str, file: UploadFile = File(...)):
             "file_name": file.filename,
             "rows": len(df),
             "columns": len(df.columns),
-            "column_names": df.columns.tolist()
+            "column_names": df.columns.tolist(),
+            "dataset_id": dataset_id
         }
     except Exception as e:
         logger.error(f"Failed to upload file: {e}")

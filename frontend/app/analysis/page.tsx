@@ -1050,14 +1050,20 @@ export default function AnalysisPage() {
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Create session on mount
+  // Create session on mount - auto-loads active dataset if available
   useEffect(() => {
     const initSession = async () => {
       try {
         const newSession = await api.session.create();
         setSession(newSession);
+
+        // Show notification if data was auto-loaded from active dataset
+        if (newSession.data_loaded && newSession.file_name) {
+          console.log(`📊 Auto-loaded active dataset: ${newSession.file_name}`);
+        }
       } catch (err) {
         console.error('Failed to create session:', err);
+        setError('Failed to initialize analysis session');
       }
     };
     initSession();
@@ -1177,6 +1183,32 @@ export default function AnalysisPage() {
             />
           ) : (
             <>
+              {/* Active Dataset Info */}
+              <div className="mb-6 p-4 bg-brand-500/5 border border-brand-500/20 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-brand-500/20 flex items-center justify-center">
+                    <FileSpreadsheet className="w-5 h-5 text-brand-500" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">{session.file_name}</p>
+                    <p className="text-sm text-foreground-muted">
+                      {session.row_count?.toLocaleString()} rows · {session.column_count} columns
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    // Reset session to allow new upload
+                    setSession(prev => prev ? { ...prev, data_loaded: false, file_name: undefined } : null);
+                    setProfile(null);
+                    setInsights(null);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-brand-500 hover:bg-brand-500/10 rounded-lg transition-colors"
+                >
+                  Change Dataset
+                </button>
+              </div>
+
               {/* Tabs */}
               <div className="flex items-center gap-1 mb-6 p-1 bg-surface-muted rounded-xl">
                 {tabs.map((tab) => (
