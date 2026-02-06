@@ -395,13 +395,14 @@ export class ChatWebSocket {
 // =============================================================================
 
 export interface Document {
-  id: string;
-  name: string;
+  doc_id: string;
+  filename: string;
   file_type: string;
-  size: number;
-  chunks: number;
-  uploaded_at: string;
+  file_size: number;
+  chunk_count: number;
+  upload_date: string;
   status: string;
+  error_message?: string;
 }
 
 export interface DocumentListResponse {

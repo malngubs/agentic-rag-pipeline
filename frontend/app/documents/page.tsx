@@ -347,13 +347,13 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ document, onDelete }) => {
           <FileIcon className="w-6 h-6" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-foreground truncate mb-1" title={document.name}>
-            {document.name}
+          <h3 className="font-medium text-foreground truncate mb-1" title={document.filename}>
+            {document.filename}
           </h3>
           <div className="flex items-center gap-3 text-xs text-foreground-muted">
-            <span>{formatFileSize(document.size)}</span>
+            <span>{formatFileSize(document.file_size)}</span>
             <span className="w-1 h-1 rounded-full bg-foreground-muted" />
-            <span>{document.chunks} chunks</span>
+            <span>{document.chunk_count} chunks</span>
           </div>
         </div>
 
@@ -392,10 +392,10 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ document, onDelete }) => {
       {/* Status and date */}
       <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
         <div className="flex items-center gap-1.5">
-          {document.status === 'processed' ? (
+          {document.status === 'indexed' ? (
             <>
               <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              <span className="text-xs text-emerald-500 font-medium">Processed</span>
+              <span className="text-xs text-emerald-500 font-medium">Indexed</span>
             </>
           ) : document.status === 'processing' ? (
             <>
@@ -405,13 +405,13 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ document, onDelete }) => {
           ) : (
             <>
               <AlertCircle className="w-4 h-4 text-red-500" />
-              <span className="text-xs text-red-500 font-medium">Error</span>
+              <span className="text-xs text-red-500 font-medium">{document.status === 'failed' ? 'Failed' : 'Error'}</span>
             </>
           )}
         </div>
         <div className="flex items-center gap-1.5 text-xs text-foreground-muted">
           <Clock className="w-3.5 h-3.5" />
-          {formatDate(document.uploaded_at)}
+          {formatDate(document.upload_date)}
         </div>
       </div>
     </motion.div>
@@ -498,7 +498,7 @@ export default function DocumentsPage() {
       setFilteredDocuments(
         documents.filter(
           (doc) =>
-            doc.name.toLowerCase().includes(query) ||
+            doc.filename.toLowerCase().includes(query) ||
             doc.file_type.toLowerCase().includes(query)
         )
       );
@@ -535,7 +535,7 @@ export default function DocumentsPage() {
 
     setIsDeleting(true);
     try {
-      await api.document.delete(selectedDocument.id);
+      await api.document.delete(selectedDocument.doc_id);
       setShowDeleteModal(false);
       setSelectedDocument(null);
       fetchDocuments();
@@ -601,7 +601,7 @@ export default function DocumentsPage() {
               <span className="w-1 h-1 rounded-full bg-foreground-muted" />
               <span className="text-sm text-foreground">
                 <span className="font-semibold">
-                  {documents.reduce((acc, doc) => acc + doc.chunks, 0)}
+                  {documents.reduce((acc, doc) => acc + doc.chunk_count, 0)}
                 </span> chunks
               </span>
             </div>
@@ -650,7 +650,7 @@ export default function DocumentsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredDocuments.map((doc) => (
                 <DocumentCard
-                  key={doc.id}
+                  key={doc.doc_id}
                   document={doc}
                   onDelete={openDeleteModal}
                 />
@@ -676,7 +676,7 @@ export default function DocumentsPage() {
           setSelectedDocument(null);
         }}
         onConfirm={handleDelete}
-        documentName={selectedDocument?.name || ''}
+        documentName={selectedDocument?.filename || ''}
         isDeleting={isDeleting}
       />
     </div>
