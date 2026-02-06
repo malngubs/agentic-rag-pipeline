@@ -109,7 +109,16 @@ async function post<T>(endpoint: string, data?: any): Promise<T> {
     headers: defaultHeaders,
     body: data ? JSON.stringify(data) : undefined,
   });
-  
+
+  return handleResponse<T>(response);
+}
+
+async function del<T>(endpoint: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'DELETE',
+    headers: defaultHeaders,
+  });
+
   return handleResponse<T>(response);
 }
 

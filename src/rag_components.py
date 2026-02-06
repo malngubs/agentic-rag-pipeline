@@ -81,7 +81,7 @@ class RAGConfig:
     # Reasoning Parameters
     max_context_chunks: int = 5
     reasoning_depth: int = 3
-    confidence_threshold: float = 0.6
+    confidence_threshold: float = 0.3  # Lowered to allow more RAG results through
     
     # LLM Settings - OpenAI Only
     openai_model: str = "gpt-4o-mini"

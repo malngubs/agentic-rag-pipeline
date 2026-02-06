@@ -39,17 +39,29 @@ import {
   FileText,
   RefreshCw,
 } from 'lucide-react';
-import { api, ChatWebSocket, ChatResponse } from '@/lib/api/client';
+import { api, ChatWebSocket, ChatResponse, DatasetUploadResponse } from '@/lib/api/client';
 import {
   ChartWidget,
   DashboardWidget,
   KPICard,
   DataTable
 } from '@/components/visualizations';
+import { DocumentPreview } from './DocumentPreview';
 
 // =============================================================================
 // TYPES
 // =============================================================================
+
+interface UploadedDocument {
+  filename: string;
+  fileSize: number;
+  fileType: string;
+  rowCount?: number;
+  columnCount?: number;
+  columns?: any[];
+  vectorChunks?: number;
+  isActive?: boolean;
+}
 
 interface ChatMessage {
   id: string;
@@ -68,6 +80,7 @@ interface ChatMessage {
     title?: string;
     description?: string;
   }>;
+  uploadedDocument?: UploadedDocument;
   executionTime?: number;
   error?: string;
 }
@@ -103,7 +116,7 @@ const Message: React.FC<MessageProps> = ({ message, isLast }) => {
         {isUser ? (
           <span className="text-sm font-semibold text-white">U</span>
         ) : (
-          <Sparkles className="w-4 h-4 text-[var(--color-brand-500)]" />
+          <BrainCircuit className="w-4 h-4 text-[var(--color-brand-500)]" />
         )}
       </div>
       
@@ -171,6 +184,22 @@ const Message: React.FC<MessageProps> = ({ message, isLast }) => {
                   return null;
               }
             })}
+          </div>
+        )}
+
+        {/* Document Preview - show after upload */}
+        {message.uploadedDocument && (
+          <div className="mt-4">
+            <DocumentPreview
+              filename={message.uploadedDocument.filename}
+              fileSize={message.uploadedDocument.fileSize}
+              fileType={message.uploadedDocument.fileType}
+              rowCount={message.uploadedDocument.rowCount}
+              columnCount={message.uploadedDocument.columnCount}
+              columns={message.uploadedDocument.columns}
+              vectorChunks={message.uploadedDocument.vectorChunks}
+              isActive={message.uploadedDocument.isActive}
+            />
           </div>
         )}
 
@@ -792,19 +821,30 @@ export const ChatInterface: React.FC = () => {
         setMessages(prev => [...prev, {
           id: userMessageId,
           role: 'user',
-          content: `📎 Uploaded: ${file.name}`,
+          content: `📎 Uploading: ${file.name}`,
           timestamp: new Date().toISOString(),
           status: 'complete',
         }]);
-        
+
         try {
-          const uploadResult = await api.document.upload(file);
+          // Use dataset API for full metadata including preview data
+          const uploadResult = await api.dataset.upload(file);
           setMessages(prev => [...prev, {
             id: `assistant-${Date.now()}`,
             role: 'assistant',
-            content: `✅ Successfully uploaded "${file.name}". The document has been processed and added to the knowledge base. You can now ask questions about it!`,
+            content: `✅ Successfully uploaded "${file.name}". The document has been processed and is ready for analysis.`,
             timestamp: new Date().toISOString(),
             status: 'complete',
+            uploadedDocument: {
+              filename: uploadResult.filename,
+              fileSize: uploadResult.file_size,
+              fileType: uploadResult.file_type,
+              rowCount: uploadResult.row_count,
+              columnCount: uploadResult.column_count,
+              columns: uploadResult.columns,
+              vectorChunks: uploadResult.vector_chunks,
+              isActive: uploadResult.is_active,
+            },
           }]);
         } catch (uploadError) {
           setMessages(prev => [...prev, {
