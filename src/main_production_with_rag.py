@@ -39,6 +39,7 @@ try:
         ChartRecommender,
         ChartGenerator,
         InsightGenerator,
+        clean_dataframe,
     )
     DATA_ANALYST_AVAILABLE = True
 except ImportError:
@@ -51,6 +52,7 @@ except ImportError:
             ChartRecommender,
             ChartGenerator,
             InsightGenerator,
+            clean_dataframe,
         )
         DATA_ANALYST_AVAILABLE = True
     except ImportError:
@@ -62,6 +64,7 @@ except ImportError:
         ChartRecommender = None
         ChartGenerator = None
         InsightGenerator = None
+        clean_dataframe = None
         logging.warning("⚠️ data_analyst module not available")
 
 # Import our RAG system
@@ -3135,6 +3138,10 @@ async def upload_session_file(session_id: str, file: UploadFile = File(...)):
         else:
             # Try CSV as default
             df = pd.read_csv(io.BytesIO(content))
+
+        # Sanitize column names for SQL compatibility
+        if clean_dataframe is not None:
+            df = clean_dataframe(df)
 
         # Update session
         _analysis_sessions[session_id]["data"] = df

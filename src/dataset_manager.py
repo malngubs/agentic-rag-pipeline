@@ -254,9 +254,55 @@ class DatasetManager:
             metadata.error_message = str(e)
             return metadata
 
+    def _sanitize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sanitize DataFrame column names for SQL compatibility.
+        Handles unnamed columns, special characters, and duplicates.
+        """
+        import re
+
+        def sanitize_column_name(col_name: str, index: int) -> str:
+            """Sanitize a single column name"""
+            col = str(col_name).strip()
+
+            # Handle unnamed columns (pandas creates "Unnamed: 0", etc.)
+            if col.lower().startswith('unnamed'):
+                return f'column_{index}'
+
+            # Replace problematic SQL characters with underscores
+            col = re.sub(r'[:\s\-\.\(\)\[\]\{\}\+\*\/\\@#$%^&!=<>,;\'\"]+', '_', col)
+
+            # Remove leading/trailing underscores
+            col = col.strip('_')
+
+            # Ensure doesn't start with a number
+            if col and col[0].isdigit():
+                col = f'col_{col}'
+
+            # If empty, use index-based name
+            if not col:
+                return f'column_{index}'
+
+            return col
+
+        # Apply sanitization with duplicate handling
+        new_columns = []
+        seen_names = set()
+        for i, col in enumerate(df.columns):
+            sanitized = sanitize_column_name(col, i)
+            if sanitized in seen_names:
+                sanitized = f'{sanitized}_{i}'
+            seen_names.add(sanitized)
+            new_columns.append(sanitized)
+
+        df.columns = new_columns
+        return df
+
     async def _parse_to_dataframe(self, content: bytes, extension: str) -> Optional[pd.DataFrame]:
         """Parse file content to pandas DataFrame"""
         try:
+            df = None
+
             if extension in ['.xlsx', '.xls']:
                 # Excel file - read first sheet by default
                 excel_file = pd.ExcelFile(BytesIO(content))
@@ -267,20 +313,24 @@ class DatasetManager:
                 if dataset_id in self._datasets:
                     self._datasets[dataset_id].sheets = excel_file.sheet_names
 
-                return df
-
             elif extension == '.csv':
-                return pd.read_csv(BytesIO(content))
+                df = pd.read_csv(BytesIO(content))
 
             elif extension == '.json':
-                return pd.read_json(BytesIO(content))
+                df = pd.read_json(BytesIO(content))
 
             elif extension == '.parquet':
-                return pd.read_parquet(BytesIO(content))
+                df = pd.read_parquet(BytesIO(content))
 
             else:
                 # Text-based files (PDF, DOCX, TXT) - no DataFrame
                 return None
+
+            # Sanitize column names for SQL compatibility
+            if df is not None:
+                df = self._sanitize_column_names(df)
+
+            return df
 
         except Exception as e:
             logger.error(f"DataFrame parsing failed: {str(e)}")
