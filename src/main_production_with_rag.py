@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from dataclasses import asdict
 import json
+import pandas as pd
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends, Header
@@ -2997,6 +2998,25 @@ class ExportRequest(BaseModel):
     format: str = "csv"
 
 
+class TransformStepRequest(BaseModel):
+    type: str
+    column: Optional[str] = None
+    config: dict = {}
+
+
+class TransformPipelineRequest(BaseModel):
+    steps: List[TransformStepRequest]
+
+
+class SavePipelineRequest(BaseModel):
+    name: str
+    steps: List[TransformStepRequest]
+
+
+class AutoFixRequest(BaseModel):
+    issues: List[dict]
+
+
 @app.post("/api/sessions", response_model=SessionResponse, tags=["Data Analysis"])
 async def create_analysis_session(request: SessionCreateRequest = None):
     """Create a new data analysis session - auto-loads active dataset if available"""
@@ -3542,6 +3562,347 @@ async def query_session(session_id: str, request: QueryRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to process query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# DATA TRANSFORMATION ENDPOINTS
+# =============================================================================
+
+# In-memory storage for transformation pipelines
+_transformation_pipelines: Dict[str, List[dict]] = {}
+
+
+@app.get("/api/sessions/{session_id}/quality", tags=["Data Transformation"])
+async def get_data_quality_issues(session_id: str):
+    """Get data quality issues for a session"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        issues = []
+
+        for col in df.columns:
+            # Check for missing values
+            missing_count = df[col].isna().sum()
+            if missing_count > 0:
+                total = len(df)
+                missing_pct = (missing_count / total) * 100
+                severity = "high" if missing_pct > 20 else "medium" if missing_pct > 5 else "low"
+                issues.append({
+                    "column": col,
+                    "type": "missing",
+                    "severity": severity,
+                    "count": int(missing_count),
+                    "description": f"{missing_count} missing values ({missing_pct:.1f}%)",
+                    "suggestion": f"Fill missing values in \"{col}\" with mean/median"
+                })
+
+            # Check for duplicates (only for object/string columns)
+            if df[col].dtype == 'object':
+                dup_count = df[col].duplicated().sum()
+                if dup_count > len(df) * 0.5:  # More than 50% duplicates
+                    issues.append({
+                        "column": col,
+                        "type": "duplicate",
+                        "severity": "low",
+                        "count": int(dup_count),
+                        "description": f"{dup_count} duplicate values",
+                        "suggestion": f"Consider if duplicates in \"{col}\" are expected"
+                    })
+
+        return issues
+    except Exception as e:
+        logger.error(f"Failed to analyze data quality: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/transform", tags=["Data Transformation"])
+async def apply_transformation(session_id: str, step: TransformStepRequest):
+    """Apply a single transformation to session data"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"].copy()
+        column = step.column
+        config = step.config
+
+        if step.type == "rename" and column:
+            new_name = config.get("newName", column)
+            df = df.rename(columns={column: new_name})
+
+        elif step.type == "change_type" and column:
+            new_type = config.get("newType", "string")
+            if new_type == "integer":
+                df[column] = pd.to_numeric(df[column], errors='coerce').astype('Int64')
+            elif new_type == "float":
+                df[column] = pd.to_numeric(df[column], errors='coerce')
+            elif new_type == "string":
+                df[column] = df[column].astype(str)
+            elif new_type == "date":
+                df[column] = pd.to_datetime(df[column], errors='coerce')
+            elif new_type == "boolean":
+                df[column] = df[column].astype(bool)
+
+        elif step.type == "fill_missing" and column:
+            strategy = config.get("strategy", "constant")
+            if strategy == "constant":
+                fill_value = config.get("fillValue", "")
+                df[column] = df[column].fillna(fill_value)
+            elif strategy == "mean":
+                df[column] = df[column].fillna(df[column].mean())
+            elif strategy == "median":
+                df[column] = df[column].fillna(df[column].median())
+            elif strategy == "mode":
+                df[column] = df[column].fillna(df[column].mode().iloc[0] if not df[column].mode().empty else "")
+            elif strategy == "forward":
+                df[column] = df[column].ffill()
+            elif strategy == "backward":
+                df[column] = df[column].bfill()
+
+        elif step.type == "remove_duplicates":
+            if column:
+                df = df.drop_duplicates(subset=[column])
+            else:
+                df = df.drop_duplicates()
+
+        elif step.type == "trim" and column:
+            if df[column].dtype == 'object':
+                df[column] = df[column].str.strip()
+
+        elif step.type == "uppercase" and column:
+            if df[column].dtype == 'object':
+                df[column] = df[column].str.upper()
+
+        elif step.type == "lowercase" and column:
+            if df[column].dtype == 'object':
+                df[column] = df[column].str.lower()
+
+        elif step.type == "replace" and column:
+            find = config.get("find", "")
+            replace_with = config.get("replace", "")
+            df[column] = df[column].replace(find, replace_with)
+
+        elif step.type == "round" and column:
+            decimals = config.get("decimals", 2)
+            df[column] = df[column].round(decimals)
+
+        elif step.type == "filter" and column:
+            operator = config.get("operator", "equals")
+            value = config.get("value", "")
+            if operator == "equals":
+                df = df[df[column] == value]
+            elif operator == "not_equals":
+                df = df[df[column] != value]
+            elif operator == "greater_than":
+                df = df[df[column] > float(value)]
+            elif operator == "less_than":
+                df = df[df[column] < float(value)]
+            elif operator == "contains":
+                df = df[df[column].astype(str).str.contains(value, na=False)]
+            elif operator == "is_null":
+                df = df[df[column].isna()]
+            elif operator == "is_not_null":
+                df = df[df[column].notna()]
+
+        elif step.type == "sort" and column:
+            ascending = config.get("direction", "ascending") == "ascending"
+            df = df.sort_values(by=column, ascending=ascending)
+
+        elif step.type == "split_column" and column:
+            delimiter = config.get("delimiter", ",")
+            split_df = df[column].str.split(delimiter, expand=True)
+            for i, new_col in enumerate(split_df.columns):
+                df[f"{column}_{i+1}"] = split_df[new_col]
+
+        elif step.type == "merge_columns" and column:
+            column2 = config.get("column2", "")
+            separator = config.get("separator", " ")
+            if column2 and column2 in df.columns:
+                df[f"{column}_merged"] = df[column].astype(str) + separator + df[column2].astype(str)
+
+        # Update session data
+        session["data"] = df
+        session["row_count"] = len(df)
+        session["column_count"] = len(df.columns)
+
+        # Generate preview
+        preview = df.head(10).to_dict(orient='records')
+
+        return {
+            "success": True,
+            "preview": preview,
+            "row_count": len(df),
+            "column_count": len(df.columns)
+        }
+    except Exception as e:
+        logger.error(f"Failed to apply transformation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/transform/pipeline", tags=["Data Transformation"])
+async def apply_transformation_pipeline(session_id: str, request: TransformPipelineRequest):
+    """Apply multiple transformations as a pipeline"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        for step in request.steps:
+            await apply_transformation(session_id, step)
+
+        df = session["data"]
+        return {
+            "success": True,
+            "row_count": len(df),
+            "column_count": len(df.columns)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to apply transformation pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/transform/preview", tags=["Data Transformation"])
+async def preview_transformation(session_id: str, step: TransformStepRequest):
+    """Preview a transformation without applying it"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        df = session["data"]
+        before = df.head(5).to_dict(orient='records')
+
+        # Create a copy for transformation preview
+        temp_session = {
+            "data": df.copy(),
+            "data_loaded": True,
+            "row_count": len(df),
+            "column_count": len(df.columns)
+        }
+        temp_id = f"temp_{session_id}"
+        _analysis_sessions[temp_id] = temp_session
+
+        try:
+            await apply_transformation(temp_id, step)
+            after = _analysis_sessions[temp_id]["data"].head(5).to_dict(orient='records')
+        finally:
+            # Clean up temp session
+            del _analysis_sessions[temp_id]
+
+        return {
+            "before": before,
+            "after": after
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to preview transformation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/pipelines", tags=["Data Transformation"])
+async def save_transformation_pipeline(session_id: str, request: SavePipelineRequest):
+    """Save a transformation pipeline"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        pipeline_id = str(uuid.uuid4())
+        pipeline = {
+            "id": pipeline_id,
+            "name": request.name,
+            "session_id": session_id,
+            "steps": [s.dict() for s in request.steps],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+
+        if session_id not in _transformation_pipelines:
+            _transformation_pipelines[session_id] = []
+        _transformation_pipelines[session_id].append(pipeline)
+
+        return pipeline
+    except Exception as e:
+        logger.error(f"Failed to save pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sessions/{session_id}/pipelines", tags=["Data Transformation"])
+async def list_transformation_pipelines(session_id: str):
+    """List saved transformation pipelines"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return _transformation_pipelines.get(session_id, [])
+
+
+@app.post("/api/sessions/{session_id}/quality/autofix", tags=["Data Transformation"])
+async def auto_fix_quality_issues(session_id: str, request: AutoFixRequest):
+    """Automatically fix data quality issues"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+
+    try:
+        fixed_count = 0
+        for issue in request.issues:
+            column = issue.get("column")
+            issue_type = issue.get("type")
+
+            if issue_type == "missing" and column:
+                # Auto-fix missing values with appropriate strategy
+                step = TransformStepRequest(
+                    type="fill_missing",
+                    column=column,
+                    config={"strategy": "mean"}  # Default to mean for numeric
+                )
+                df = session["data"]
+                if df[column].dtype in ['int64', 'float64']:
+                    await apply_transformation(session_id, step)
+                else:
+                    step.config = {"strategy": "mode"}
+                    await apply_transformation(session_id, step)
+                fixed_count += 1
+
+            elif issue_type == "duplicate" and column:
+                step = TransformStepRequest(
+                    type="remove_duplicates",
+                    column=column,
+                    config={}
+                )
+                await apply_transformation(session_id, step)
+                fixed_count += 1
+
+        return {
+            "success": True,
+            "fixed_count": fixed_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to auto-fix issues: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
