@@ -8,7 +8,7 @@
 
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ThemeSelector, useTheme, THEMES } from '@/components/providers/ThemeProvider';
 import {
@@ -20,6 +20,8 @@ import {
   Download,
   Trash2,
   Check,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 
 // =============================================================================
@@ -212,22 +214,7 @@ export default function SettingsPage() {
             </SettingsSection>
 
             {/* Data Management */}
-            <SettingsSection
-              title="Data Management"
-              description="Export or delete your data"
-              icon={Database}
-            >
-              <div className="space-y-3">
-                <button className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-colors">
-                  <Download className="w-4 h-4" />
-                  Export All Data
-                </button>
-                <button className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-colors">
-                  <Trash2 className="w-4 h-4" />
-                  Delete All Data
-                </button>
-              </div>
-            </SettingsSection>
+            <DataManagementSection />
           </div>
 
           {/* Save Button */}
@@ -245,6 +232,135 @@ export default function SettingsPage() {
     </div>
   );
 }
+
+// =============================================================================
+// DATA MANAGEMENT SECTION COMPONENT
+// =============================================================================
+
+const DataManagementSection: React.FC = () => {
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearSuccess, setClearSuccess] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
+
+  const handleClearLocalData = async () => {
+    setIsClearing(true);
+    setClearSuccess(false);
+    setClearError(null);
+
+    try {
+      // Clear localStorage (where Zustand stores persist)
+      const keysToRemove = [
+        'session-storage',
+        'ui-storage',
+        'macrocomm-theme-history',
+      ];
+
+      keysToRemove.forEach((key) => {
+        localStorage.removeItem(key);
+      });
+
+      // Clear sessionStorage
+      sessionStorage.clear();
+
+      // Keep the theme preference
+      // localStorage.getItem('macrocomm-theme') is preserved
+
+      setClearSuccess(true);
+
+      // Auto-hide success message after 3 seconds
+      setTimeout(() => setClearSuccess(false), 3000);
+    } catch (error) {
+      setClearError('Failed to clear local data. Please try again.');
+      setTimeout(() => setClearError(null), 5000);
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const handleClearAllData = () => {
+    if (
+      confirm(
+        'Are you sure you want to delete ALL local data? This will clear your session history, preferences, and cached data. This action cannot be undone.',
+      )
+    ) {
+      localStorage.clear();
+      sessionStorage.clear();
+      alert('All local data has been cleared. The page will now reload.');
+      window.location.reload();
+    }
+  };
+
+  return (
+    <SettingsSection
+      title="Data Management"
+      description="Manage cached data and local storage"
+      icon={Database}
+    >
+      <div className="space-y-4">
+        {/* Clear Cache Button */}
+        <div className="p-4 bg-surface-muted rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <div className="text-sm font-medium text-foreground">Clear Local Cache</div>
+              <div className="text-xs text-foreground-muted mt-1">
+                Clears session data and cached information. Useful if you see old data after
+                restarting.
+              </div>
+            </div>
+            <button
+              onClick={handleClearLocalData}
+              disabled={isClearing}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 text-white rounded-lg transition-colors"
+            >
+              {isClearing ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              {isClearing ? 'Clearing...' : 'Clear Cache'}
+            </button>
+          </div>
+
+          {/* Success/Error Messages */}
+          {clearSuccess && (
+            <div className="flex items-center gap-2 mt-2 p-2 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-sm">
+              <Check className="w-4 h-4" />
+              Local cache cleared successfully!
+            </div>
+          )}
+          {clearError && (
+            <div className="flex items-center gap-2 mt-2 p-2 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+              <AlertCircle className="w-4 h-4" />
+              {clearError}
+            </div>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap gap-3">
+          <button className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-colors">
+            <Download className="w-4 h-4" />
+            Export All Data
+          </button>
+          <button
+            onClick={handleClearAllData}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete All Data
+          </button>
+        </div>
+
+        {/* Info Note */}
+        <div className="text-xs text-foreground-muted p-3 bg-surface-muted rounded-lg border border-border">
+          <strong>Note:</strong> Clearing cache will remove stored sessions and UI
+          preferences. Your uploaded documents and backend data are not affected.
+          Theme preference is preserved.
+        </div>
+      </div>
+    </SettingsSection>
+  );
+};
 
 // =============================================================================
 // THEME BUTTON COMPONENT

@@ -514,45 +514,89 @@ export default function ScenariosPage() {
 
   // Run forecast for all scenarios
   const handleRunForecasts = useCallback(async () => {
-    if (!session?.id) return;
+    if (!session?.id || !profile) return;
 
     setIsCalculating(true);
     setError(null);
 
     try {
-      // In a real implementation, this would call the backend forecast API
-      // for each scenario with their specific variable adjustments
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Find a suitable numeric column for forecasting
+      const numericColumns = profile.columns.filter(
+        (col: any) => col.type === 'number' || col.type === 'float64' || col.type === 'int64'
+      );
 
-      // Simulate forecast results
-      setScenarios(prev => prev.map(scenario => ({
-        ...scenario,
-        forecast: {
-          method: 'holt_winters',
-          forecast_values: Array.from({ length: 12 }, (_, i) => {
-            const base = scenario.kpis?.totalRevenue || 10000000;
-            const growth = (scenario.variables.find(v => v.id === 'growth')?.adjustedValue || 5) / 100;
-            return base * Math.pow(1 + growth / 12, i + 1) * (0.95 + Math.random() * 0.1);
-          }),
-          forecast_dates: Array.from({ length: 12 }, (_, i) => {
-            const date = new Date();
-            date.setMonth(date.getMonth() + i + 1);
-            return date.toISOString().slice(0, 7);
-          }),
-          confidence_lower: [],
-          confidence_upper: [],
-          confidence_level: 0.95,
-          metrics: { mae: 0, rmse: 0, mape: 0 },
-          trend_direction: 'increasing',
-          seasonality_detected: true,
-        },
-      })));
+      if (numericColumns.length === 0) {
+        throw new Error('No numeric columns available for forecasting');
+      }
+
+      // Use the first numeric column (or one that looks like revenue/sales)
+      const forecastColumn = numericColumns.find(
+        (col: any) => /revenue|sales|amount|value|total/i.test(col.name)
+      ) || numericColumns[0];
+
+      // Call backend forecast API for baseline
+      const baselineForecast = await api.session.forecast(
+        session.id,
+        forecastColumn.name,
+        12, // 12 periods
+        'auto'
+      );
+
+      // Generate dates for the forecast
+      const forecastDates = Array.from({ length: 12 }, (_, i) => {
+        const date = new Date();
+        date.setMonth(date.getMonth() + i + 1);
+        return date.toISOString().slice(0, 7);
+      });
+
+      // Apply scenario adjustments to create variant forecasts
+      setScenarios(prev => prev.map(scenario => {
+        // Get growth adjustment from scenario variables
+        const growthVar = scenario.variables.find(v => v.id === 'growth');
+        const costsVar = scenario.variables.find(v => v.id === 'costs');
+        const priceVar = scenario.variables.find(v => v.id === 'price');
+        const volumeVar = scenario.variables.find(v => v.id === 'volume');
+
+        // Calculate combined adjustment factor
+        const growthAdjustment = (growthVar?.adjustedValue || 0) / 100;
+        const costsAdjustment = (costsVar?.adjustedValue || 0) / 100;
+        const priceAdjustment = (priceVar?.adjustedValue || 0) / 100;
+        const volumeAdjustment = (volumeVar?.adjustedValue || 0) / 100;
+
+        // Combined effect on forecast values
+        const combinedMultiplier = (1 + priceAdjustment) * (1 + volumeAdjustment);
+
+        // Apply adjustments to forecast values
+        const adjustedForecastValues = (baselineForecast.forecast_values || []).map((value: number, i: number) => {
+          // Apply growth rate adjustment compounding over time
+          const growthFactor = Math.pow(1 + growthAdjustment / 12, i + 1);
+          // Apply price/volume multiplier
+          const adjustedValue = value * growthFactor * combinedMultiplier;
+          // Apply cost adjustment (reduces the value for cost scenarios)
+          return adjustedValue * (1 - costsAdjustment * 0.5);
+        });
+
+        return {
+          ...scenario,
+          forecast: {
+            method: baselineForecast.method || 'holt_winters',
+            forecast_values: adjustedForecastValues,
+            forecast_dates: forecastDates,
+            confidence_lower: baselineForecast.confidence_lower || [],
+            confidence_upper: baselineForecast.confidence_upper || [],
+            confidence_level: baselineForecast.confidence_level || 0.95,
+            metrics: baselineForecast.metrics || { mae: 0, rmse: 0, mape: 0 },
+            trend_direction: growthAdjustment >= 0 ? 'increasing' : 'decreasing',
+            seasonality_detected: baselineForecast.seasonality_detected || false,
+          },
+        };
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Forecast calculation failed');
     } finally {
       setIsCalculating(false);
     }
-  }, [session?.id]);
+  }, [session?.id, profile]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -871,3 +915,4 @@ export default function ScenariosPage() {
     </div>
   );
 }
+

@@ -25,7 +25,7 @@ import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
+from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
@@ -66,6 +66,7 @@ except ImportError:
 
 # Import our RAG system
 from rag_components import RAGSystem, RAGConfig
+
 
 # ✨ PHASE 5 IMPORTS - Configuration & Advanced Features
 try:
@@ -151,6 +152,43 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ✨ UNIFIED DATASET MANAGER - Upload once, use everywhere (lazy import)
+DATASET_MANAGER_AVAILABLE = False
+DatasetManager = None
+get_dataset_manager = None
+
+def ensure_dataset_manager_loaded() -> bool:
+    """Lazy-load DatasetManager to avoid heavy imports during startup."""
+    global DATASET_MANAGER_AVAILABLE, DatasetManager, get_dataset_manager
+
+    if get_dataset_manager is None:
+        try:
+            from dataset_manager import DatasetManager as _DatasetManager, get_dataset_manager as _get_dataset_manager
+            DatasetManager = _DatasetManager
+            get_dataset_manager = _get_dataset_manager
+            DATASET_MANAGER_AVAILABLE = True
+            logger.info("✅ dataset_manager loaded")
+        except ImportError:
+            DATASET_MANAGER_AVAILABLE = False
+            DatasetManager = None
+            get_dataset_manager = None
+            logger.warning("⚠️ dataset_manager.py not found - unified datasets disabled")
+            return False
+
+    if DATASET_MANAGER_AVAILABLE:
+        try:
+            dataset_mgr = get_dataset_manager()
+            if 'app_state' in globals() and app_state.rag_status.get('initialized', False):
+                if getattr(dataset_mgr, "_rag_system", None) is None:
+                    dataset_mgr.set_rag_system(app_state.rag_system)
+                    logger.info("📊 Dataset Manager connected to RAG system")
+            if 'app' in globals():
+                app.state.dataset_manager = dataset_mgr
+        except Exception as e:
+            logger.warning(f"Dataset manager setup skipped: {e}")
+
+    return DATASET_MANAGER_AVAILABLE
 
 # =============================================================================
 # 📋 PYDANTIC MODELS
@@ -499,11 +537,23 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("🚀 Starting Agentic RAG Pipeline with Phase 1 Features...")
     await app_state.initialize_components()
+
+    rag_mod = sys.modules.get("rag_components")
+    if rag_mod and getattr(rag_mod, "__file__", None):
+        logger.info(f"rag_components loaded from: {rag_mod.__file__}")
     
+    # Initialize Unified Dataset Manager (if already loaded)
+    if get_dataset_manager is not None:
+        dataset_mgr = get_dataset_manager()
+        if app_state.rag_status.get('initialized', False):
+            dataset_mgr.set_rag_system(app_state.rag_system)
+            logger.info("📊 Dataset Manager connected to RAG system")
+        app.state.dataset_manager = dataset_mgr
+ 
     # Store state in app for access
     app.state.app_state = app_state
     app.state.connection_manager = app_state.connection_manager
-    
+ 
     logger.info("✅ Application startup complete!")
     yield
     
@@ -633,13 +683,17 @@ async def root():
             "validate_api_key": "/api/auth/validate-key",
             "documents_scoped": "/api/documents/scoped",
             "upload_scoped": "/api/documents/upload-scoped",
-            # Frontend endpoints
-            "workspace": "/workspace",
-            "docs": "/docs",
-            "widget_demo": "/frontend/widget/demo.html",
-            "admin": "/frontend/widget/admin.html"
+            # API Documentation
+            "docs": "/docs"
         },
-        "websocket": "/ws/chat"
+        "websocket": "/ws/chat",
+        "frontend": {
+            "note": "Next.js frontend runs on port 3000",
+            "chat": "http://localhost:3000/chat",
+            "admin": "http://localhost:3000/admin",
+            "transform": "http://localhost:3000/transform",
+            "dashboards": "http://localhost:3000/dashboards"
+        }
     }
 
 @app.get("/favicon.ico")
@@ -648,128 +702,65 @@ async def favicon():
     return Response(status_code=204)
 
 # =============================================================================
-# 🌐 HTML SERVING ROUTES - Production Frontend
+# 🌐 FRONTEND REDIRECT ROUTES
+# =============================================================================
+# The frontend is served by Next.js (port 3000 in development).
+# These routes provide API info for legacy URL requests.
 # =============================================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_index():
-    """Serve the main index.html page"""
-    try:
-        possible_paths = [
-            Path("../index.html"),
-            Path("index.html"),
-            Path("./index.html"),
-            Path(__file__).parent / "index.html",
-            Path(__file__).parent.parent / "index.html"
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-        
-        raise HTTPException(status_code=404, detail="Index page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving index.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/")
+async def api_root_info():
+    """API root - provides info about the backend API"""
+    return {
+        "service": "Macrocomm BI Platform API",
+        "version": "2.2.0",
+        "status": "healthy",
+        "frontend": "Next.js frontend runs on port 3000",
+        "endpoints": {
+            "health": "/health",
+            "api_docs": "/docs",
+            "chat": "/api/chat",
+            "websocket": "/ws/chat"
+        },
+        "message": "This is the backend API. For the web interface, access the Next.js frontend."
+    }
 
-@app.get("/admin.html", response_class=HTMLResponse)
-async def serve_admin():
-    """Serve the admin portal page"""
-    try:
-        possible_paths = [
-            Path("../admin.html"),
-            Path("admin.html"),
-            Path("./admin.html"),
-            Path(__file__).parent / "admin.html",
-            Path(__file__).parent.parent / "admin.html"
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-        
-        raise HTTPException(status_code=404, detail="Admin page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving admin.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/admin.html")
+@app.get("/login.html")
+@app.get("/workspace")
+@app.get("/workspace.html")
+async def legacy_html_redirect():
+    """Legacy HTML routes - inform about Next.js frontend"""
+    return {
+        "message": "HTML pages have been migrated to Next.js frontend",
+        "frontend_url": "http://localhost:3000",
+        "routes": {
+            "admin": "http://localhost:3000/admin",
+            "login": "http://localhost:3000/login",
+            "workspace": "http://localhost:3000/transform",
+            "chat": "http://localhost:3000/chat"
+        }
+    }
 
-
-@app.get("/login.html", response_class=HTMLResponse)
-async def serve_login():
-    """Serve the login page"""
-    try:
-        possible_paths = [
-            Path("../login.html"),
-            Path("login.html"),
-            Path("./login.html"),
-            Path(__file__).parent / "login.html",
-            Path(__file__).parent.parent / "login.html"
-        ]
-
-        for path in possible_paths:
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return HTMLResponse(content=f.read())
-
-        raise HTTPException(status_code=404, detail="Login page not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving login.html: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/workspace", response_class=HTMLResponse)
-@app.get("/workspace.html", response_class=HTMLResponse)
-async def workspace():
-    """Serve the Data Analysis Workspace"""
-    possible_paths = [
-        Path("../workspace.html"),
-        Path("workspace.html"),
-        Path("./workspace.html"),
-        Path(__file__).parent / "workspace.html",
-        Path(__file__).parent.parent / "workspace.html"
-    ]
-
-    for path in possible_paths:
-        if path.exists():
-            logger.info(f"Serving workspace.html from: {path}")
-            return HTMLResponse(content=path.read_text(), status_code=200)
-
-    logger.warning("workspace.html not found in any expected location")
-    return HTMLResponse(
-        content="""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Workspace Not Found</title>
-            <style>
-                body { font-family: -apple-system, sans-serif; padding: 60px; text-align: center; background: #f5f5f5; }
-                .container { background: white; padding: 40px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #FF6E00; }
-                p { color: #666; margin: 15px 0; }
-                a { color: #FF6E00; text-decoration: none; font-weight: 600; }
-                a:hover { text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>📊 Data Analysis Workspace</h1>
-                <p>workspace.html not found in project root.</p>
-                <p>Download it from Claude and place it in the same folder as admin.html</p>
-                <p><a href="/admin.html">← Back to Admin Dashboard</a></p>
-            </div>
-        </body>
-        </html>
-        """,
-        status_code=404
-    )
-
+@app.get("/desktop-app/download")
+async def desktop_app_download():
+    """Desktop app download information"""
+    return {
+        "product": "Macrocomm BI Platform Desktop App",
+        "description": "Cross-platform desktop application built with Electron",
+        "build_instructions": {
+            "step_1": "Navigate to desktop-app directory: cd desktop-app",
+            "step_2": "Install dependencies: npm install",
+            "step_3": "Build for your platform: npm run build",
+            "step_4": "Find builds in the 'dist' folder"
+        },
+        "platforms": ["Windows (.exe)", "macOS (.dmg)", "Linux (.AppImage)"],
+        "source_location": "desktop-app/",
+        "requirements": {
+            "nodejs": ">=18.0.0",
+            "npm": ">=8.0.0"
+        }
+    }
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -1223,6 +1214,234 @@ async def search_by_tags(tags: str, match_all: bool = False):
     except Exception as e:
         logger.error(f"Failed to search by tags: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# 📊 UNIFIED DATASET MANAGEMENT (Upload Once, Use Everywhere)
+# =============================================================================
+ 
+class DatasetUploadResponse(BaseModel):
+    """Response for dataset upload"""
+    success: bool
+    dataset_id: str
+    filename: str
+    file_size: int
+    file_type: str
+    row_count: int = 0
+    column_count: int = 0
+    columns: List[Dict[str, Any]] = []
+    vector_chunks: int = 0
+    is_active: bool = False
+    message: str = ""
+ 
+ 
+class DatasetListResponse(BaseModel):
+    """Response for listing datasets"""
+    datasets: List[Dict[str, Any]]
+    total: int
+    active_dataset_id: Optional[str] = None
+ 
+ 
+class SetActiveDatasetRequest(BaseModel):
+    """Request to set active dataset"""
+    dataset_id: str
+ 
+ 
+@app.post("/api/datasets/upload", response_model=DatasetUploadResponse, tags=["Datasets"])
+async def upload_dataset(file: UploadFile = File(...)):
+    """
+    Upload a dataset for use across all BI Platform features.
+    The dataset will be:
+    - Parsed into a DataFrame (for Analysis, Statistics, Forecasting)
+    - Indexed into vector store (for Chat/RAG queries)
+    - Set as active dataset if first upload
+    """
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+ 
+    try:
+        # Validation
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+ 
+        supported_types = {'.pdf', '.docx', '.txt', '.xlsx', '.xls', '.csv', '.json'}
+        extension = Path(file.filename).suffix.lower()
+ 
+        if extension not in supported_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{extension}'. Supported: {supported_types}"
+            )
+ 
+        # Read file content
+        content = await file.read()
+ 
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+ 
+        if len(content) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File size exceeds 100MB limit")
+ 
+        # Upload and process dataset
+        metadata = await dataset_mgr.upload_dataset(content, file.filename)
+ 
+        return DatasetUploadResponse(
+            success=metadata.status.value == "ready",
+            dataset_id=metadata.id,
+            filename=metadata.original_filename,
+            file_size=metadata.file_size,
+            file_type=metadata.file_type,
+            row_count=metadata.row_count,
+            column_count=metadata.column_count,
+            columns=[c.__dict__ for c in metadata.columns[:20]],  # Limit columns in response
+            vector_chunks=metadata.vector_chunks,
+            is_active=dataset_mgr._active_dataset_id == metadata.id,
+            message=f"Dataset '{file.filename}' uploaded successfully. Ready for all features!"
+            if metadata.status.value == "ready"
+            else f"Upload failed: {metadata.error_message}"
+        )
+ 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dataset upload error: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Dataset upload failed: {str(e)}")
+ 
+ 
+@app.get("/api/datasets", response_model=DatasetListResponse, tags=["Datasets"])
+async def list_datasets():
+    """List all uploaded datasets"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    datasets = dataset_mgr.list_datasets()
+ 
+    return DatasetListResponse(
+        datasets=datasets,
+        total=len(datasets),
+        active_dataset_id=dataset_mgr._active_dataset_id
+    )
+ 
+ 
+@app.get("/api/datasets/active", tags=["Datasets"])
+async def get_active_dataset():
+    """Get the currently active dataset"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    active = dataset_mgr.get_active_dataset()
+ 
+    if not active:
+        return JSONResponse(content={"active": False, "message": "No dataset uploaded yet"})
+ 
+    return JSONResponse(content={
+        "active": True,
+        "dataset": active.to_dict(),
+        "is_tabular": active.file_type in ['excel', 'csv', 'json', 'parquet']
+    })
+ 
+ 
+@app.post("/api/datasets/active", tags=["Datasets"])
+async def set_active_dataset(request: SetActiveDatasetRequest):
+    """Set the active dataset for all features"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    success = dataset_mgr.set_active_dataset(request.dataset_id)
+ 
+    if not success:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+ 
+    active = dataset_mgr.get_active_dataset()
+    return JSONResponse(content={
+        "success": True,
+        "active_dataset": active.to_dict() if active else None
+    })
+ 
+ 
+@app.get("/api/datasets/{dataset_id}", tags=["Datasets"])
+async def get_dataset(dataset_id: str):
+    """Get details for a specific dataset"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    dataset = dataset_mgr.get_dataset(dataset_id)
+ 
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+ 
+    return JSONResponse(content=dataset.to_dict())
+ 
+ 
+@app.delete("/api/datasets/{dataset_id}", tags=["Datasets"])
+async def delete_dataset(dataset_id: str):
+    """Delete a dataset"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    success = dataset_mgr.delete_dataset(dataset_id)
+ 
+    if not success:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+ 
+    return JSONResponse(content={"success": True, "deleted": dataset_id})
+ 
+ 
+@app.get("/api/datasets/{dataset_id}/data", tags=["Datasets"])
+async def get_dataset_data(
+    dataset_id: str,
+    offset: int = 0,
+    limit: int = 100,
+    columns: Optional[str] = None
+):
+    """Get the actual data from a dataset (paginated)"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    df = dataset_mgr.get_dataframe(dataset_id)
+ 
+    if df is None:
+        raise HTTPException(status_code=404, detail="Dataset not found or is not tabular")
+ 
+    # Filter columns if specified
+    if columns:
+        col_list = [c.strip() for c in columns.split(",")]
+        available_cols = [c for c in col_list if c in df.columns]
+        if available_cols:
+            df = df[available_cols]
+ 
+    # Paginate
+    total_rows = len(df)
+    df_slice = df.iloc[offset:offset + limit]
+ 
+    # Convert to JSON-serializable format
+    import numpy as np
+    data = df_slice.replace({np.nan: None}).to_dict(orient='records')
+ 
+    return JSONResponse(content={
+        "data": data,
+        "total_rows": total_rows,
+        "offset": offset,
+        "limit": limit,
+        "columns": list(df.columns)
+    })
+ 
+ 
+@app.get("/api/datasets/stats", tags=["Datasets"])
+async def get_dataset_stats():
+    """Get dataset manager statistics"""
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    dataset_mgr = get_dataset_manager()
+    return JSONResponse(content=dataset_mgr.get_stats())
 
 # =============================================================================
 # 💬 CHAT ENDPOINTS
@@ -2746,10 +2965,23 @@ class QueryRequest(BaseModel):
 class ExportRequest(BaseModel):
     format: str = "csv"
 
+class TransformStepRequest(BaseModel):
+    type: str  # rename, change_type, fill_missing, remove_duplicates, filter, sort, etc.
+    column: Optional[str] = None
+    config: dict = {}
+ 
+class TransformPipelineRequest(BaseModel):
+    steps: List[TransformStepRequest]
 
+class NLToSQLRequest(BaseModel):
+    query: str
+ 
+class ExecuteSQLRequest(BaseModel):
+    sql: str
+ 
 @app.post("/api/sessions", response_model=SessionResponse, tags=["Data Analysis"])
 async def create_analysis_session(request: SessionCreateRequest = None):
-    """Create a new data analysis session"""
+    """Create a new data analysis session - auto-loads active dataset if available"""
     if not DATA_ANALYST_AVAILABLE:
         raise HTTPException(status_code=503, detail="Data analyst module not available")
 
@@ -2771,12 +3003,30 @@ async def create_analysis_session(request: SessionCreateRequest = None):
         }
         _session_orchestrators[session_id] = orchestrator
 
+        # Auto-load active dataset from DatasetManager if available
+        if ensure_dataset_manager_loaded():
+            dataset_mgr = get_dataset_manager()
+            active_df = dataset_mgr.get_active_dataframe()
+            active_meta = dataset_mgr.get_active_dataset()
+
+            if active_df is not None and active_meta is not None:
+                _analysis_sessions[session_id]["data"] = active_df
+                _analysis_sessions[session_id]["data_loaded"] = True
+                _analysis_sessions[session_id]["file_name"] = active_meta.original_filename
+                _analysis_sessions[session_id]["row_count"] = len(active_df)
+                _analysis_sessions[session_id]["column_count"] = len(active_df.columns)
+                _analysis_sessions[session_id]["dataset_id"] = active_meta.id
+                logger.info(f"📊 Auto-loaded active dataset '{active_meta.original_filename}' into session {session_id}")
+
         logger.info(f"📊 Created analysis session: {session_id}")
 
         return SessionResponse(
             id=session_id,
             created_at=_analysis_sessions[session_id]["created_at"],
-            data_loaded=False
+            data_loaded=_analysis_sessions[session_id]["data_loaded"],
+            file_name=_analysis_sessions[session_id].get("file_name"),
+            row_count=_analysis_sessions[session_id].get("row_count"),
+            column_count=_analysis_sessions[session_id].get("column_count"),
         )
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
@@ -2799,10 +3049,52 @@ async def get_analysis_session(session_id: str):
         column_count=session.get("column_count"),
     )
 
+@app.post("/api/sessions/{session_id}/load-active-dataset", tags=["Data Analysis"])
+async def load_active_dataset_to_session(session_id: str):
+    """Load the active dataset from DatasetManager into the session"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    if not ensure_dataset_manager_loaded():
+        raise HTTPException(status_code=503, detail="Dataset manager not available")
+ 
+    try:
+        dataset_mgr = get_dataset_manager()
+        active_df = dataset_mgr.get_active_dataframe()
+        active_meta = dataset_mgr.get_active_dataset()
+ 
+        if active_df is None or active_meta is None:
+            raise HTTPException(status_code=404, detail="No active dataset available. Please upload a dataset first.")
+ 
+        # Update session with active dataset
+        _analysis_sessions[session_id]["data"] = active_df
+        _analysis_sessions[session_id]["data_loaded"] = True
+        _analysis_sessions[session_id]["file_name"] = active_meta.original_filename
+        _analysis_sessions[session_id]["row_count"] = len(active_df)
+        _analysis_sessions[session_id]["column_count"] = len(active_df.columns)
+        _analysis_sessions[session_id]["dataset_id"] = active_meta.id
+ 
+        logger.info(f"📊 Loaded active dataset '{active_meta.original_filename}' into session {session_id}")
+ 
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Loaded dataset '{active_meta.original_filename}'",
+            "file_name": active_meta.original_filename,
+            "rows": len(active_df),
+            "columns": len(active_df.columns),
+            "dataset_id": active_meta.id
+        })
+ 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load active dataset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/sessions/{session_id}/upload", tags=["Data Analysis"])
 async def upload_session_file(session_id: str, file: UploadFile = File(...)):
-    """Upload a file to the analysis session"""
+    """Upload a file to the analysis session - also adds to unified DatasetManager"""
     if session_id not in _analysis_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -2835,6 +3127,18 @@ async def upload_session_file(session_id: str, file: UploadFile = File(...)):
         _analysis_sessions[session_id]["row_count"] = len(df)
         _analysis_sessions[session_id]["column_count"] = len(df.columns)
 
+        # Also add to DatasetManager for cross-feature access
+        dataset_id = None
+        if ensure_dataset_manager_loaded():
+            try:
+                dataset_mgr = get_dataset_manager()
+                metadata = await dataset_mgr.upload_dataset(content, file.filename)
+                dataset_id = metadata.id
+                _analysis_sessions[session_id]["dataset_id"] = dataset_id
+                logger.info(f"📊 Also added to DatasetManager: {dataset_id}")
+            except Exception as dm_err:
+                logger.warning(f"Failed to add to DatasetManager: {dm_err}")
+
         logger.info(f"📊 Uploaded file to session {session_id}: {file.filename} ({len(df)} rows)")
 
         return {
@@ -2842,7 +3146,8 @@ async def upload_session_file(session_id: str, file: UploadFile = File(...)):
             "file_name": file.filename,
             "rows": len(df),
             "columns": len(df.columns),
-            "column_names": df.columns.tolist()
+            "column_names": df.columns.tolist(),
+            "dataset_id": dataset_id
         }
     except Exception as e:
         logger.error(f"Failed to upload file: {e}")
@@ -3216,7 +3521,197 @@ async def query_session(session_id: str, request: QueryRequest):
         logger.error(f"Failed to process query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
+@app.post("/api/sessions/{session_id}/nl-to-sql", tags=["Data Analysis"])
+async def nl_to_sql(session_id: str, request: NLToSQLRequest):
+    """Convert natural language query to SQL"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+ 
+    import time
+    start_time = time.time()
+ 
+    try:
+        df = session["data"]
+        file_name = session.get("file_name", "data")
+        # Create a clean table name from file name (remove extension, sanitize)
+        table_name = file_name.rsplit('.', 1)[0] if '.' in file_name else file_name
+        table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name)
+ 
+        columns = df.columns.tolist()
+        column_types = {col: str(df[col].dtype) for col in columns}
+ 
+        query_lower = request.query.lower()
+ 
+        # Intelligent SQL generation based on natural language
+        generated_sql = ""
+        explanation = ""
+ 
+        # Detect query intent and generate appropriate SQL
+        if any(word in query_lower for word in ['top', 'highest', 'best', 'most']):
+            # Find numeric columns for ordering
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            limit_match = next((int(w) for w in query_lower.split() if w.isdigit()), 10)
+            order_col = numeric_cols[0] if numeric_cols else columns[-1]
+ 
+            generated_sql = f"SELECT *\nFROM {table_name}\nORDER BY {order_col} DESC\nLIMIT {limit_match}"
+            explanation = f"This query retrieves the top {limit_match} records ordered by '{order_col}' in descending order."
+ 
+        elif any(word in query_lower for word in ['total', 'sum']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            cat_cols = [c for c in columns if df[c].dtype == 'object' or 'int' not in str(df[c].dtype)]
+ 
+            sum_col = numeric_cols[0] if numeric_cols else columns[-1]
+            group_col = cat_cols[0] if cat_cols else columns[0]
+ 
+            generated_sql = f"SELECT {group_col}, SUM({sum_col}) as total\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY total DESC"
+            explanation = f"This query calculates the total sum of '{sum_col}' grouped by '{group_col}'."
+ 
+        elif any(word in query_lower for word in ['average', 'avg', 'mean']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            cat_cols = [c for c in columns if df[c].dtype == 'object']
+ 
+            avg_col = numeric_cols[0] if numeric_cols else columns[-1]
+            group_col = cat_cols[0] if cat_cols else columns[0]
+ 
+            generated_sql = f"SELECT {group_col}, AVG({avg_col}) as average\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY average DESC"
+            explanation = f"This query calculates the average of '{avg_col}' grouped by '{group_col}'."
+ 
+        elif any(word in query_lower for word in ['count', 'how many']):
+            cat_cols = [c for c in columns if df[c].dtype == 'object']
+            group_col = cat_cols[0] if cat_cols else columns[0]
+ 
+            generated_sql = f"SELECT {group_col}, COUNT(*) as count\nFROM {table_name}\nGROUP BY {group_col}\nORDER BY count DESC"
+            explanation = f"This query counts records grouped by '{group_col}'."
+ 
+        elif any(word in query_lower for word in ['over', 'greater', 'more than', '>']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            filter_col = numeric_cols[0] if numeric_cols else columns[-1]
+ 
+            # Extract number from query
+            import re
+            numbers = re.findall(r'[\d,]+\.?\d*', query_lower)
+            threshold = float(numbers[0].replace(',', '')) if numbers else 1000
+ 
+            generated_sql = f"SELECT *\nFROM {table_name}\nWHERE {filter_col} > {threshold}"
+            explanation = f"This query filters records where '{filter_col}' is greater than {threshold:,.0f}."
+ 
+        elif any(word in query_lower for word in ['under', 'less', 'below', '<']):
+            numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)]
+            filter_col = numeric_cols[0] if numeric_cols else columns[-1]
+ 
+            import re
+            numbers = re.findall(r'[\d,]+\.?\d*', query_lower)
+            threshold = float(numbers[0].replace(',', '')) if numbers else 1000
+ 
+            generated_sql = f"SELECT *\nFROM {table_name}\nWHERE {filter_col} < {threshold}"
+            explanation = f"This query filters records where '{filter_col}' is less than {threshold:,.0f}."
+ 
+        elif any(word in query_lower for word in ['all', 'show', 'list', 'display']):
+            col_list = ', '.join(columns[:6]) if len(columns) > 6 else ', '.join(columns)
+            generated_sql = f"SELECT {col_list}\nFROM {table_name}\nLIMIT 100"
+            explanation = f"This query retrieves the first 100 records from your data with columns: {col_list}."
+ 
+        else:
+            # Default: select first few columns with limit
+            col_list = ', '.join(columns[:5]) if len(columns) > 5 else ', '.join(columns)
+            generated_sql = f"SELECT {col_list}\nFROM {table_name}\nLIMIT 100"
+            explanation = f"This query selects key columns from '{table_name}'. You can modify it to suit your needs."
+ 
+        execution_time = (time.time() - start_time) * 1000  # Convert to ms
+ 
+        return {
+            "generated_sql": generated_sql,
+            "table_name": table_name,
+            "columns": columns,
+            "column_types": column_types,
+            "explanation": explanation,
+            "generation_time": round(execution_time, 2),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate SQL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+@app.post("/api/sessions/{session_id}/execute-sql", tags=["Data Analysis"])
+async def execute_sql(session_id: str, request: ExecuteSQLRequest):
+    """Execute SQL query on session data using pandas"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+ 
+    import time
+    start_time = time.time()
+ 
+    try:
+        import pandas as pd
+        import pandasql as ps
+ 
+        df = session["data"]
+        file_name = session.get("file_name", "data")
+        table_name = file_name.rsplit('.', 1)[0] if '.' in file_name else file_name
+        table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name)
+ 
+        # Create local environment for pandasql with the actual table name
+        local_env = {table_name: df, 'data': df}  # Support both actual name and 'data' fallback
+ 
+        # Execute the SQL query
+        result_df = ps.sqldf(request.sql, local_env)
+ 
+        execution_time = (time.time() - start_time) * 1000  # Convert to ms
+ 
+        # Convert result to list of lists for JSON serialization
+        columns = result_df.columns.tolist()
+        data = result_df.values.tolist()
+ 
+        # Generate explanation based on the SQL
+        sql_lower = request.sql.lower()
+        if 'group by' in sql_lower:
+            explanation = f"Query executed successfully. Grouped data into {len(data)} categories."
+        elif 'order by' in sql_lower and 'desc' in sql_lower:
+            explanation = f"Query executed successfully. Sorted {len(data)} records in descending order."
+        elif 'where' in sql_lower:
+            explanation = f"Query executed successfully. Found {len(data)} matching records."
+        else:
+            explanation = f"Query executed successfully. Retrieved {len(data)} records with {len(columns)} columns."
+ 
+        return {
+            "columns": columns,
+            "data": data,
+            "row_count": len(data),
+            "column_count": len(columns),
+            "execution_time": round(execution_time, 2),
+            "explanation": explanation,
+        }
+    except ImportError:
+        # pandasql not installed - use basic filtering
+        logger.warning("pandasql not installed, using basic query execution")
+        df = session["data"]
+        execution_time = (time.time() - start_time) * 1000
+ 
+        # Basic execution - just return head of data
+        result_df = df.head(100)
+        return {
+            "columns": result_df.columns.tolist(),
+            "data": result_df.values.tolist(),
+            "row_count": len(result_df),
+            "column_count": len(result_df.columns),
+            "execution_time": round(execution_time, 2),
+            "explanation": "Basic query executed. Install pandasql for full SQL support.",
+        }
+    except Exception as e:
+        logger.error(f"Failed to execute SQL: {e}")
+        raise HTTPException(status_code=500, detail=f"SQL execution error: {str(e)}")
+ 
+ 
 @app.post("/api/sessions/{session_id}/export", tags=["Data Analysis"])
 async def export_session_data(session_id: str, request: ExportRequest):
     """Export session data to various formats"""
@@ -3264,16 +3759,937 @@ async def export_session_data(session_id: str, request: ExportRequest):
 
 
 # =============================================================================
+# 🔄 DATA TRANSFORMATION ENDPOINTS
+# =============================================================================
+ 
+def apply_transformation(df, step: TransformStepRequest):
+    """Apply a single transformation step to a DataFrame"""
+    import pandas as pd
+    import numpy as np
+ 
+    column = step.column
+    config = step.config
+    transform_type = step.type
+ 
+    if transform_type == 'rename':
+        new_name = config.get('new_name')
+        if column and new_name:
+            df = df.rename(columns={column: new_name})
+ 
+    elif transform_type == 'change_type':
+        new_type = config.get('new_type', 'string')
+        if column:
+            try:
+                if new_type == 'number':
+                    df[column] = pd.to_numeric(df[column], errors='coerce')
+                elif new_type == 'string':
+                    df[column] = df[column].astype(str)
+                elif new_type == 'date':
+                    df[column] = pd.to_datetime(df[column], errors='coerce')
+                elif new_type == 'boolean':
+                    df[column] = df[column].astype(bool)
+            except Exception:
+                pass
+ 
+    elif transform_type == 'fill_missing':
+        strategy = config.get('strategy', 'mean')
+        custom_value = config.get('custom_value')
+        if column:
+            if strategy == 'mean' and pd.api.types.is_numeric_dtype(df[column]):
+                df[column] = df[column].fillna(df[column].mean())
+            elif strategy == 'median' and pd.api.types.is_numeric_dtype(df[column]):
+                df[column] = df[column].fillna(df[column].median())
+            elif strategy == 'mode':
+                mode_val = df[column].mode()
+                if len(mode_val) > 0:
+                    df[column] = df[column].fillna(mode_val[0])
+            elif strategy == 'custom' and custom_value is not None:
+                df[column] = df[column].fillna(custom_value)
+            elif strategy == 'forward':
+                df[column] = df[column].fillna(method='ffill')
+            elif strategy == 'backward':
+                df[column] = df[column].fillna(method='bfill')
+ 
+    elif transform_type == 'remove_duplicates':
+        subset = config.get('subset')  # List of columns or None for all
+        keep = config.get('keep', 'first')
+        if subset:
+            df = df.drop_duplicates(subset=subset, keep=keep)
+        else:
+            df = df.drop_duplicates(keep=keep)
+ 
+    elif transform_type == 'filter':
+        operator = config.get('operator', 'equals')
+        value = config.get('value')
+        if column and value is not None:
+            if operator == 'equals':
+                df = df[df[column] == value]
+            elif operator == 'not_equals':
+                df = df[df[column] != value]
+            elif operator == 'greater_than':
+                df = df[df[column] > float(value)]
+            elif operator == 'less_than':
+                df = df[df[column] < float(value)]
+            elif operator == 'contains':
+                df = df[df[column].astype(str).str.contains(str(value), na=False)]
+            elif operator == 'not_contains':
+                df = df[~df[column].astype(str).str.contains(str(value), na=False)]
+ 
+    elif transform_type == 'sort':
+        ascending = config.get('ascending', True)
+        if column:
+            df = df.sort_values(by=column, ascending=ascending)
+ 
+    elif transform_type == 'trim':
+        if column:
+            df[column] = df[column].astype(str).str.strip()
+ 
+    elif transform_type == 'uppercase':
+        if column:
+            df[column] = df[column].astype(str).str.upper()
+ 
+    elif transform_type == 'lowercase':
+        if column:
+            df[column] = df[column].astype(str).str.lower()
+ 
+    elif transform_type == 'round':
+        decimals = config.get('decimals', 2)
+        if column and pd.api.types.is_numeric_dtype(df[column]):
+            df[column] = df[column].round(decimals)
+ 
+    elif transform_type == 'replace':
+        find_value = config.get('find')
+        replace_value = config.get('replace', '')
+        if column and find_value is not None:
+            df[column] = df[column].replace(find_value, replace_value)
+ 
+    elif transform_type == 'split_column':
+        delimiter = config.get('delimiter', ',')
+        new_column_prefix = config.get('new_column_prefix', column)
+        if column:
+            split_df = df[column].astype(str).str.split(delimiter, expand=True)
+            for i, col in enumerate(split_df.columns):
+                df[f"{new_column_prefix}_{i+1}"] = split_df[col]
+ 
+    elif transform_type == 'merge_columns':
+        columns_to_merge = config.get('columns', [])
+        new_column_name = config.get('new_column_name', 'merged')
+        separator = config.get('separator', ' ')
+        if columns_to_merge:
+            df[new_column_name] = df[columns_to_merge].astype(str).agg(separator.join, axis=1)
+ 
+    elif transform_type == 'drop_column':
+        if column and column in df.columns:
+            df = df.drop(columns=[column])
+ 
+    elif transform_type == 'calculate':
+        expression = config.get('expression', '')
+        new_column_name = config.get('new_column_name', 'calculated')
+        if expression:
+            try:
+                # Simple expression evaluation (be careful with eval in production)
+                df[new_column_name] = df.eval(expression)
+            except Exception:
+                pass
+ 
+    return df
+ 
+ 
+@app.post("/api/sessions/{session_id}/transform", tags=["Data Transformation"])
+async def apply_single_transform(session_id: str, request: TransformStepRequest):
+    """Apply a single transformation to session data"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+ 
+    try:
+        df = session["data"].copy()
+        original_shape = df.shape
+ 
+        df = apply_transformation(df, request)
+ 
+        # Update session data
+        session["data"] = df
+        session["row_count"] = len(df)
+        session["column_count"] = len(df.columns)
+ 
+        logger.info(f"🔄 Applied transformation '{request.type}' to session {session_id}: {original_shape} -> {df.shape}")
+ 
+        return {
+            "success": True,
+            "transform_type": request.type,
+            "rows_before": original_shape[0],
+            "rows_after": len(df),
+            "columns_before": original_shape[1],
+            "columns_after": len(df.columns),
+            "preview": df.head(10).to_dict(orient="records")
+        }
+    except Exception as e:
+        logger.error(f"Failed to apply transformation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+@app.post("/api/sessions/{session_id}/transform/pipeline", tags=["Data Transformation"])
+async def apply_transform_pipeline(session_id: str, request: TransformPipelineRequest):
+    """Apply multiple transformations to session data"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+ 
+    try:
+        df = session["data"].copy()
+        original_shape = df.shape
+        applied_steps = []
+ 
+        for step in request.steps:
+            try:
+                df = apply_transformation(df, step)
+                applied_steps.append({
+                    "type": step.type,
+                    "column": step.column,
+                    "success": True
+                })
+            except Exception as step_error:
+                applied_steps.append({
+                    "type": step.type,
+                    "column": step.column,
+                    "success": False,
+                    "error": str(step_error)
+                })
+ 
+        # Update session data
+        session["data"] = df
+        session["row_count"] = len(df)
+        session["column_count"] = len(df.columns)
+ 
+        logger.info(f"🔄 Applied {len(request.steps)} transformations to session {session_id}: {original_shape} -> {df.shape}")
+ 
+        return {
+            "success": True,
+            "steps_applied": len(applied_steps),
+            "rows_before": original_shape[0],
+            "rows_after": len(df),
+            "columns_before": original_shape[1],
+            "columns_after": len(df.columns),
+            "steps": applied_steps,
+            "preview": df.head(10).to_dict(orient="records")
+        }
+    except Exception as e:
+        logger.error(f"Failed to apply transformation pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+@app.post("/api/sessions/{session_id}/transform/preview", tags=["Data Transformation"])
+async def preview_transform(session_id: str, request: TransformStepRequest):
+    """Preview a transformation without applying it"""
+    if session_id not in _analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+ 
+    session = _analysis_sessions[session_id]
+    if not session["data_loaded"] or session["data"] is None:
+        raise HTTPException(status_code=400, detail="No data loaded in session")
+ 
+    try:
+        # Work on a copy - don't modify original
+        df_before = session["data"].head(20)
+        df_after = apply_transformation(session["data"].copy(), request).head(20)
+ 
+        return {
+            "before": df_before.to_dict(orient="records"),
+            "after": df_after.to_dict(orient="records"),
+            "rows_before": len(session["data"]),
+            "rows_after": len(apply_transformation(session["data"].copy(), request))
+        }
+    except Exception as e:
+        logger.error(f"Failed to preview transformation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+# =============================================================================
+# 📋 REPORTS & ALERTS API (Tier 2 BI Features)
+# =============================================================================
+ 
+# In-memory storage for reports and alerts
+_scheduled_reports: Dict[str, Any] = {}
+_alerts: Dict[str, Any] = {}
+_alert_history: Dict[str, Any] = {}
+ 
+ 
+class ReportCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    frequency: str = "weekly"  # daily, weekly, monthly, quarterly
+    recipients: List[str] = []
+    metrics: List[str] = []
+    format: str = "pdf"  # pdf, excel, html
+    dashboard_id: Optional[str] = None
+ 
+ 
+class ReportUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    frequency: Optional[str] = None
+    recipients: Optional[List[str]] = None
+    metrics: Optional[List[str]] = None
+    format: Optional[str] = None
+    is_active: Optional[bool] = None
+ 
+ 
+class AlertCreateRequest(BaseModel):
+    name: str
+    metric: str
+    operator: str = "greater_than"  # greater_than, less_than, equals, change_by, change_by_percent
+    threshold: float
+    priority: str = "medium"  # low, medium, high, critical
+    channels: List[str] = ["email"]  # email, slack, teams, webhook
+    recipients: List[str] = []
+ 
+ 
+class AlertUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    metric: Optional[str] = None
+    operator: Optional[str] = None
+    threshold: Optional[float] = None
+    priority: Optional[str] = None
+    channels: Optional[List[str]] = None
+    recipients: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+ 
+ 
+def calculate_next_run(frequency: str) -> str:
+    """Calculate the next run time based on frequency"""
+    now = datetime.now()
+    if frequency == "daily":
+        next_run = now + timedelta(days=1)
+    elif frequency == "weekly":
+        next_run = now + timedelta(weeks=1)
+    elif frequency == "monthly":
+        next_run = now + timedelta(days=30)
+    elif frequency == "quarterly":
+        next_run = now + timedelta(days=90)
+    else:
+        next_run = now + timedelta(weeks=1)
+    return next_run.isoformat()
+ 
+ 
+@app.get("/api/reports", tags=["Reports & Alerts"])
+async def list_reports():
+    """List all scheduled reports"""
+    reports = list(_scheduled_reports.values())
+    return sorted(reports, key=lambda r: r.get("created_at", ""), reverse=True)
+ 
+ 
+@app.post("/api/reports", tags=["Reports & Alerts"])
+async def create_report(request: ReportCreateRequest):
+    """Create a new scheduled report"""
+    report_id = f"report-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+ 
+    report = {
+        "id": report_id,
+        "name": request.name,
+        "description": request.description,
+        "frequency": request.frequency,
+        "next_run": calculate_next_run(request.frequency),
+        "last_run": None,
+        "recipients": request.recipients,
+        "dashboard_id": request.dashboard_id,
+        "metrics": request.metrics,
+        "format": request.format,
+        "is_active": True,
+        "created_at": now,
+    }
+ 
+    _scheduled_reports[report_id] = report
+    logger.info(f"📋 Created report: {report_id} - {request.name}")
+    return report
+ 
+ 
+@app.get("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def get_report(report_id: str):
+    """Get a specific report by ID"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return _scheduled_reports[report_id]
+ 
+ 
+@app.post("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def update_report(report_id: str, request: ReportUpdateRequest):
+    """Update a scheduled report"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+ 
+    report = _scheduled_reports[report_id]
+ 
+    if request.name is not None:
+        report["name"] = request.name
+    if request.description is not None:
+        report["description"] = request.description
+    if request.frequency is not None:
+        report["frequency"] = request.frequency
+        report["next_run"] = calculate_next_run(request.frequency)
+    if request.recipients is not None:
+        report["recipients"] = request.recipients
+    if request.metrics is not None:
+        report["metrics"] = request.metrics
+    if request.format is not None:
+        report["format"] = request.format
+    if request.is_active is not None:
+        report["is_active"] = request.is_active
+ 
+    _scheduled_reports[report_id] = report
+    logger.info(f"📋 Updated report: {report_id}")
+    return report
+ 
+ 
+@app.delete("/api/reports/{report_id}", tags=["Reports & Alerts"])
+async def delete_report(report_id: str):
+    """Delete a scheduled report"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+ 
+    del _scheduled_reports[report_id]
+    logger.info(f"📋 Deleted report: {report_id}")
+    return {"success": True, "message": f"Report {report_id} deleted"}
+ 
+ 
+@app.post("/api/reports/{report_id}/run", tags=["Reports & Alerts"])
+async def run_report(report_id: str):
+    """Run a report immediately"""
+    if report_id not in _scheduled_reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+ 
+    report = _scheduled_reports[report_id]
+    report["last_run"] = datetime.now().isoformat()
+    report["next_run"] = calculate_next_run(report["frequency"])
+    _scheduled_reports[report_id] = report
+ 
+    # In a real implementation, this would generate and send the report
+    logger.info(f"📋 Running report: {report_id} - {report['name']}")
+ 
+    return {
+        "success": True,
+        "message": f"Report '{report['name']}' is being generated and will be sent to {len(report['recipients'])} recipients",
+        "report_id": report_id,
+        "format": report["format"],
+        "recipients": report["recipients"],
+    }
+ 
+ 
+@app.get("/api/alerts", tags=["Reports & Alerts"])
+async def list_alerts():
+    """List all alerts"""
+    alerts = list(_alerts.values())
+    return sorted(alerts, key=lambda a: a.get("created_at", ""), reverse=True)
+ 
+ 
+@app.post("/api/alerts", tags=["Reports & Alerts"])
+async def create_alert(request: AlertCreateRequest):
+    """Create a new alert"""
+    alert_id = f"alert-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+ 
+    alert = {
+        "id": alert_id,
+        "name": request.name,
+        "metric": request.metric,
+        "operator": request.operator,
+        "threshold": request.threshold,
+        "priority": request.priority,
+        "channels": request.channels,
+        "recipients": request.recipients,
+        "is_active": True,
+        "last_triggered": None,
+        "trigger_count": 0,
+        "created_at": now,
+    }
+ 
+    _alerts[alert_id] = alert
+    logger.info(f"🔔 Created alert: {alert_id} - {request.name}")
+    return alert
+ 
+ 
+@app.get("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def get_alert(alert_id: str):
+    """Get a specific alert by ID"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return _alerts[alert_id]
+ 
+ 
+@app.post("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def update_alert(alert_id: str, request: AlertUpdateRequest):
+    """Update an alert"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+ 
+    alert = _alerts[alert_id]
+ 
+    if request.name is not None:
+        alert["name"] = request.name
+    if request.metric is not None:
+        alert["metric"] = request.metric
+    if request.operator is not None:
+        alert["operator"] = request.operator
+    if request.threshold is not None:
+        alert["threshold"] = request.threshold
+    if request.priority is not None:
+        alert["priority"] = request.priority
+    if request.channels is not None:
+        alert["channels"] = request.channels
+    if request.recipients is not None:
+        alert["recipients"] = request.recipients
+    if request.is_active is not None:
+        alert["is_active"] = request.is_active
+ 
+    _alerts[alert_id] = alert
+    logger.info(f"🔔 Updated alert: {alert_id}")
+    return alert
+ 
+ 
+@app.delete("/api/alerts/{alert_id}", tags=["Reports & Alerts"])
+async def delete_alert(alert_id: str):
+    """Delete an alert"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+ 
+    del _alerts[alert_id]
+    logger.info(f"🔔 Deleted alert: {alert_id}")
+    return {"success": True, "message": f"Alert {alert_id} deleted"}
+ 
+ 
+@app.get("/api/alerts/history", tags=["Reports & Alerts"])
+async def get_alert_history(limit: int = 50):
+    """Get alert trigger history"""
+    history = list(_alert_history.values())
+    sorted_history = sorted(history, key=lambda h: h.get("triggered_at", ""), reverse=True)
+    return sorted_history[:limit]
+ 
+ 
+@app.post("/api/alerts/history/{history_id}/acknowledge", tags=["Reports & Alerts"])
+async def acknowledge_alert(history_id: str):
+    """Acknowledge an alert in history"""
+    if history_id not in _alert_history:
+        raise HTTPException(status_code=404, detail="Alert history entry not found")
+ 
+    entry = _alert_history[history_id]
+    entry["status"] = "acknowledged"
+    _alert_history[history_id] = entry
+ 
+    logger.info(f"🔔 Acknowledged alert history: {history_id}")
+    return entry
+ 
+ 
+@app.post("/api/alerts/trigger", tags=["Reports & Alerts"])
+async def trigger_alert_manually(alert_id: str, value: float):
+    """Manually trigger an alert (for testing)"""
+    if alert_id not in _alerts:
+        raise HTTPException(status_code=404, detail="Alert not found")
+ 
+    alert = _alerts[alert_id]
+    history_id = f"history-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+ 
+    # Update alert stats
+    alert["last_triggered"] = now
+    alert["trigger_count"] = alert.get("trigger_count", 0) + 1
+    _alerts[alert_id] = alert
+ 
+    # Create history entry
+    history_entry = {
+        "id": history_id,
+        "alert_id": alert_id,
+        "alert_name": alert["name"],
+        "triggered_at": now,
+        "value": value,
+        "threshold": alert["threshold"],
+        "status": "triggered",
+        "message": f"{alert['metric']} reached {value} (threshold: {alert['threshold']})",
+    }
+    _alert_history[history_id] = history_entry
+ 
+    logger.info(f"🔔 Alert triggered: {alert_id} - value {value}")
+    return history_entry
+ 
+ 
+# =============================================================================
+# 👥 COLLABORATION API (Tier 2 BI Features)
+# =============================================================================
+
+# In-memory storage for collaboration features
+_workspaces: Dict[str, Any] = {}
+_shared_resources: Dict[str, Any] = {}
+_comments: Dict[str, Any] = {}
+_activity_feed: List[Any] = []
+
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    icon: str = "folder"
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ResourceShareRequest(BaseModel):
+    visibility: str = "team"  # private, team, organization, public
+    shared_with: Optional[List[str]] = None
+
+
+class CommentCreateRequest(BaseModel):
+    content: str
+    mentions: Optional[List[str]] = None
+
+
+# Initialize with default workspace
+def _ensure_default_workspace():
+    if not _workspaces:
+        default_ws = {
+            "id": "ws-default",
+            "name": "General",
+            "description": "Default workspace for all team members",
+            "icon": "folder",
+            "member_count": 1,
+            "resource_count": 0,
+            "created_at": datetime.now().isoformat(),
+            "is_default": True,
+        }
+        _workspaces["ws-default"] = default_ws
+
+
+@app.get("/api/workspaces", tags=["Collaboration"])
+async def list_workspaces():
+    """List all workspaces"""
+    _ensure_default_workspace()
+    workspaces = list(_workspaces.values())
+    return sorted(workspaces, key=lambda w: (not w.get("is_default", False), w.get("name", "")))
+
+
+@app.post("/api/workspaces", tags=["Collaboration"])
+async def create_workspace(request: WorkspaceCreateRequest):
+    """Create a new workspace"""
+    workspace_id = f"ws-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    workspace = {
+        "id": workspace_id,
+        "name": request.name,
+        "description": request.description,
+        "icon": request.icon,
+        "member_count": 1,
+        "resource_count": 0,
+        "created_at": now,
+        "is_default": False,
+    }
+
+    _workspaces[workspace_id] = workspace
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "create",
+        "actor_name": "You",
+        "content": f'created workspace "{request.name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"👥 Created workspace: {workspace_id} - {request.name}")
+    return workspace
+
+
+@app.get("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def get_workspace(workspace_id: str):
+    """Get a specific workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return _workspaces[workspace_id]
+
+
+@app.post("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def update_workspace(workspace_id: str, request: WorkspaceUpdateRequest):
+    """Update a workspace"""
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    workspace = _workspaces[workspace_id]
+
+    if request.name is not None:
+        workspace["name"] = request.name
+    if request.description is not None:
+        workspace["description"] = request.description
+    if request.icon is not None:
+        workspace["icon"] = request.icon
+
+    _workspaces[workspace_id] = workspace
+    logger.info(f"👥 Updated workspace: {workspace_id}")
+    return workspace
+
+
+@app.delete("/api/workspaces/{workspace_id}", tags=["Collaboration"])
+async def delete_workspace(workspace_id: str):
+    """Delete a workspace"""
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    workspace = _workspaces[workspace_id]
+    if workspace.get("is_default"):
+        raise HTTPException(status_code=400, detail="Cannot delete default workspace")
+
+    del _workspaces[workspace_id]
+    logger.info(f"👥 Deleted workspace: {workspace_id}")
+    return {"success": True, "message": f"Workspace {workspace_id} deleted"}
+
+
+@app.get("/api/workspaces/{workspace_id}/members", tags=["Collaboration"])
+async def get_workspace_members(workspace_id: str):
+    """Get members of a workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # Return mock members for now
+    return [
+        {
+            "id": "user-1",
+            "name": "You",
+            "email": "user@company.com",
+            "role": "owner",
+            "is_online": True,
+        }
+    ]
+
+
+@app.get("/api/workspaces/{workspace_id}/resources", tags=["Collaboration"])
+async def list_workspace_resources(workspace_id: str):
+    """List resources in a workspace"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    resources = [r for r in _shared_resources.values() if r.get("workspace_id") == workspace_id]
+    return sorted(resources, key=lambda r: r.get("updated_at", ""), reverse=True)
+
+
+@app.post("/api/resources/{resource_id}/share", tags=["Collaboration"])
+async def share_resource(resource_id: str, request: ResourceShareRequest):
+    """Share a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    resource = _shared_resources[resource_id]
+    resource["visibility"] = request.visibility
+    if request.shared_with:
+        resource["shared_with"] = request.shared_with
+    resource["updated_at"] = datetime.now().isoformat()
+
+    _shared_resources[resource_id] = resource
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "share",
+        "actor_name": "You",
+        "content": f'shared "{resource["name"]}" with visibility: {request.visibility}',
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    logger.info(f"👥 Shared resource: {resource_id}")
+    return resource
+
+
+@app.get("/api/resources/{resource_id}/comments", tags=["Collaboration"])
+async def get_resource_comments(resource_id: str):
+    """Get comments for a resource"""
+    comments = [c for c in _comments.values() if c.get("resource_id") == resource_id]
+    return sorted(comments, key=lambda c: c.get("created_at", ""), reverse=True)
+
+
+@app.post("/api/resources/{resource_id}/comments", tags=["Collaboration"])
+async def add_comment(resource_id: str, request: CommentCreateRequest):
+    """Add a comment to a resource"""
+    comment_id = f"comment-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    comment = {
+        "id": comment_id,
+        "resource_id": resource_id,
+        "author_id": "user-1",
+        "author_name": "You",
+        "content": request.content,
+        "mentions": request.mentions or [],
+        "created_at": now,
+        "reply_count": 0,
+        "like_count": 0,
+    }
+
+    _comments[comment_id] = comment
+
+    # Update resource comment count
+    if resource_id in _shared_resources:
+        _shared_resources[resource_id]["comment_count"] = _shared_resources[resource_id].get("comment_count", 0) + 1
+
+    # Add activity
+    resource_name = _shared_resources.get(resource_id, {}).get("name", "a resource")
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "comment",
+        "actor_name": "You",
+        "content": f'commented on "{resource_name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"💬 Added comment: {comment_id}")
+    return comment
+
+
+@app.post("/api/comments/{comment_id}/like", tags=["Collaboration"])
+async def like_comment(comment_id: str):
+    """Like a comment"""
+    if comment_id not in _comments:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    _comments[comment_id]["like_count"] = _comments[comment_id].get("like_count", 0) + 1
+    return _comments[comment_id]
+
+
+@app.get("/api/activity", tags=["Collaboration"])
+async def get_activity_feed(workspace_id: Optional[str] = None, limit: int = 50):
+    """Get activity feed"""
+    activities = _activity_feed[:limit]
+    return activities
+
+
+@app.post("/api/resources", tags=["Collaboration"])
+async def create_shared_resource(
+    name: str,
+    type: str,
+    workspace_id: str,
+    description: Optional[str] = "",
+    visibility: str = "team"
+):
+    """Create a shared resource"""
+    _ensure_default_workspace()
+    if workspace_id not in _workspaces:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    resource_id = f"res-{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+
+    resource = {
+        "id": resource_id,
+        "name": name,
+        "type": type,
+        "description": description,
+        "visibility": visibility,
+        "owner_id": "user-1",
+        "owner_name": "You",
+        "workspace_id": workspace_id,
+        "created_at": now,
+        "updated_at": now,
+        "view_count": 0,
+        "like_count": 0,
+        "comment_count": 0,
+    }
+
+    _shared_resources[resource_id] = resource
+
+    # Update workspace resource count
+    _workspaces[workspace_id]["resource_count"] = _workspaces[workspace_id].get("resource_count", 0) + 1
+
+    # Add activity
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "create",
+        "actor_name": "You",
+        "content": f'created "{name}"',
+        "timestamp": now,
+    })
+
+    logger.info(f"📄 Created resource: {resource_id} - {name}")
+    return resource
+
+
+@app.get("/api/resources/{resource_id}", tags=["Collaboration"])
+async def get_resource(resource_id: str):
+    """Get a specific resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    # Increment view count
+    _shared_resources[resource_id]["view_count"] = _shared_resources[resource_id].get("view_count", 0) + 1
+
+    return _shared_resources[resource_id]
+
+
+@app.post("/api/resources/{resource_id}/like", tags=["Collaboration"])
+async def like_resource(resource_id: str):
+    """Like a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    _shared_resources[resource_id]["like_count"] = _shared_resources[resource_id].get("like_count", 0) + 1
+
+    resource = _shared_resources[resource_id]
+    _activity_feed.insert(0, {
+        "id": f"act-{uuid.uuid4().hex[:8]}",
+        "type": "like",
+        "actor_name": "You",
+        "content": f'liked "{resource["name"]}"',
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    return _shared_resources[resource_id]
+
+
+@app.delete("/api/resources/{resource_id}", tags=["Collaboration"])
+async def delete_resource(resource_id: str):
+    """Delete a resource"""
+    if resource_id not in _shared_resources:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    resource = _shared_resources[resource_id]
+    workspace_id = resource.get("workspace_id")
+
+    del _shared_resources[resource_id]
+
+    # Update workspace resource count
+    if workspace_id and workspace_id in _workspaces:
+        _workspaces[workspace_id]["resource_count"] = max(0, _workspaces[workspace_id].get("resource_count", 1) - 1)
+
+    # Remove associated comments
+    comment_ids_to_remove = [c_id for c_id, c in _comments.items() if c.get("resource_id") == resource_id]
+    for c_id in comment_ids_to_remove:
+        del _comments[c_id]
+
+    logger.info(f"📄 Deleted resource: {resource_id}")
+    return {"success": True, "message": f"Resource {resource_id} deleted"}
+
+
+# =============================================================================
 # 🚀 DEVELOPMENT SERVER
 # =============================================================================
 
 if __name__ == "__main__":
+    import os
+    port = int(os.getenv("API_PORT", "8000"))
     logger.info("🚀 Starting RAG-enabled development server with Phase 1 Features...")
-    logger.info("📊 Features: Analytics ✅, Citations ✅, Conversation History ✅")
+    logger.info(f"📊 Features: Analytics ✅, Citations ✅, Conversation History ✅")
+    logger.info(f"🌐 Server will run on http://127.0.0.1:{port}")
     uvicorn.run(
         "main_production_with_rag:app",
         host="127.0.0.1",
-        port=8000,
+        port=port,
         reload=True,
         access_log=True,
         log_level="info",

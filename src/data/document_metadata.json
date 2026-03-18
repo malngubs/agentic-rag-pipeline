@@ -8,5 +8,85 @@
     "chunk_count": 159,
     "status": "indexed",
     "error_message": null
+  },
+  "a91fc357-e94b-4079-842c-e991b9fc98c1": {
+    "doc_id": "a91fc357-e94b-4079-842c-e991b9fc98c1",
+    "filename": "ENDUMENI DATA SET REV1 (002).xlsx",
+    "file_type": ".xlsx",
+    "file_size": 880798,
+    "upload_date": "2026-01-20T23:44:46.023202",
+    "chunk_count": 20,
+    "status": "indexed",
+    "error_message": null
+  },
+  "a81b07ee-8160-4803-82e5-4bb31f320120": {
+    "doc_id": "a81b07ee-8160-4803-82e5-4bb31f320120",
+    "filename": "cleaned_dataset_3.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 755790,
+    "upload_date": "2026-01-21T09:05:02.108576",
+    "chunk_count": 35,
+    "status": "indexed",
+    "error_message": null
+  },
+  "7643625a-b73f-4c7e-a7a3-1e4d32e1e2fa": {
+    "doc_id": "7643625a-b73f-4c7e-a7a3-1e4d32e1e2fa",
+    "filename": "cleaned_dataset_3.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 755790,
+    "upload_date": "2026-02-04T10:42:56.441277",
+    "chunk_count": 15,
+    "status": "indexed",
+    "error_message": null
+  },
+  "1561783f-5a88-41cb-91cc-f47212bd32bb": {
+    "doc_id": "1561783f-5a88-41cb-91cc-f47212bd32bb",
+    "filename": "CU020a - All Customers 12 Month Purchase Summary 2.xls",
+    "file_type": ".xls",
+    "file_size": 3326976,
+    "upload_date": "2026-02-04T14:10:56.841054",
+    "chunk_count": 3,
+    "status": "indexed",
+    "error_message": null
+  },
+  "2d15a17b-ebc1-465e-b4eb-9093297db709": {
+    "doc_id": "2d15a17b-ebc1-465e-b4eb-9093297db709",
+    "filename": "street_counts.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 39778,
+    "upload_date": "2026-02-05T11:13:41.330812",
+    "chunk_count": 4,
+    "status": "indexed",
+    "error_message": null
+  },
+  "df5cf694-7c75-43b1-94d8-f16468181b46": {
+    "doc_id": "df5cf694-7c75-43b1-94d8-f16468181b46",
+    "filename": "street_counts.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 39778,
+    "upload_date": "2026-02-05T15:03:50.033501",
+    "chunk_count": 4,
+    "status": "indexed",
+    "error_message": null
+  },
+  "02911cf8-047b-4676-8df8-257160bd9c4e": {
+    "doc_id": "02911cf8-047b-4676-8df8-257160bd9c4e",
+    "filename": "street_counts.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 39778,
+    "upload_date": "2026-02-06T10:36:26.862381",
+    "chunk_count": 4,
+    "status": "indexed",
+    "error_message": null
+  },
+  "f31a1828-fa02-4120-95bf-c5f8084be658": {
+    "doc_id": "f31a1828-fa02-4120-95bf-c5f8084be658",
+    "filename": "street_counts.xlsx",
+    "file_type": ".xlsx",
+    "file_size": 39778,
+    "upload_date": "2026-02-06T14:40:13.889181",
+    "chunk_count": 4,
+    "status": "indexed",
+    "error_message": null
   }
 }

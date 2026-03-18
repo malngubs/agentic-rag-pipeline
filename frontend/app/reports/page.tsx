@@ -16,6 +16,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { motion, AnimatePresence } from 'framer-motion';
+import { api } from '@/lib/api/client';
 import {
   Bell,
   Calendar,
@@ -710,164 +711,222 @@ export default function ReportsPage() {
   const [editingReport, setEditingReport] = useState<ScheduledReport | undefined>();
   const [editingAlert, setEditingAlert] = useState<Alert | undefined>();
   const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Initialize with sample data
-  useEffect(() => {
-    setReports([
-      {
-        id: 'report-1',
-        name: 'Weekly Sales Summary',
-        description: 'Comprehensive sales metrics and trends',
-        frequency: 'weekly',
-        nextRun: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-        lastRun: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
-        recipients: ['team@company.com', 'manager@company.com'],
-        metrics: ['Total Revenue', 'Monthly Sales', 'Conversion Rate'],
-        format: 'pdf',
-        isActive: true,
-        createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-      },
-      {
-        id: 'report-2',
-        name: 'Monthly KPI Dashboard',
-        description: 'Executive KPI overview',
-        frequency: 'monthly',
-        nextRun: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
-        recipients: ['executives@company.com'],
-        metrics: ['Net Profit Margin', 'Customer Count', 'Churn Rate'],
-        format: 'excel',
-        isActive: true,
-        createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
-      },
-    ]);
+  // Helper to convert backend format to frontend format
+  const convertReport = (r: any): ScheduledReport => ({
+    id: r.id,
+    name: r.name,
+    description: r.description || '',
+    frequency: r.frequency,
+    nextRun: new Date(r.next_run),
+    lastRun: r.last_run ? new Date(r.last_run) : undefined,
+    recipients: r.recipients || [],
+    dashboardId: r.dashboard_id,
+    metrics: r.metrics || [],
+    format: r.format || 'pdf',
+    isActive: r.is_active,
+    createdAt: new Date(r.created_at),
+  });
 
-    setAlerts([
-      {
-        id: 'alert-1',
-        name: 'Revenue Threshold Alert',
-        metric: 'Total Revenue',
-        operator: 'greater_than',
-        threshold: 100000,
-        priority: 'high',
-        channels: ['email', 'slack'],
-        recipients: ['team@company.com'],
-        isActive: true,
-        lastTriggered: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-        triggerCount: 5,
-        createdAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
-      },
-      {
-        id: 'alert-2',
-        name: 'Low Inventory Warning',
-        metric: 'Inventory Levels',
-        operator: 'less_than',
-        threshold: 100,
-        priority: 'critical',
-        channels: ['email'],
-        recipients: ['operations@company.com'],
-        isActive: true,
-        triggerCount: 2,
-        createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-      },
-    ]);
+  const convertAlert = (a: any): Alert => ({
+    id: a.id,
+    name: a.name,
+    metric: a.metric,
+    operator: a.operator,
+    threshold: a.threshold,
+    priority: a.priority,
+    channels: a.channels || ['email'],
+    recipients: a.recipients || [],
+    isActive: a.is_active,
+    lastTriggered: a.last_triggered ? new Date(a.last_triggered) : undefined,
+    triggerCount: a.trigger_count || 0,
+    createdAt: new Date(a.created_at),
+  });
 
-    setAlertHistory([
-      {
-        id: 'history-1',
-        alertId: 'alert-1',
-        alertName: 'Revenue Threshold Alert',
-        triggeredAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-        value: 125000,
-        threshold: 100000,
-        status: 'triggered',
-        message: 'Total Revenue exceeded threshold by 25%',
-      },
-      {
-        id: 'history-2',
-        alertId: 'alert-2',
-        alertName: 'Low Inventory Warning',
-        triggeredAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-        value: 85,
-        threshold: 100,
-        status: 'acknowledged',
-        message: 'Inventory levels dropped below minimum threshold',
-      },
-    ]);
+  const convertAlertHistory = (h: any): AlertHistory => ({
+    id: h.id,
+    alertId: h.alert_id,
+    alertName: h.alert_name,
+    triggeredAt: new Date(h.triggered_at),
+    value: h.value,
+    threshold: h.threshold,
+    status: h.status,
+    message: h.message,
+  });
+
+  // Load data from backend
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [reportsData, alertsData, historyData] = await Promise.all([
+        api.reports.listReports(),
+        api.reports.listAlerts(),
+        api.reports.getAlertHistory(50),
+      ]);
+
+      setReports(reportsData.map(convertReport));
+      setAlerts(alertsData.map(convertAlert));
+      setAlertHistory(historyData.map(convertAlertHistory));
+    } catch (err) {
+      console.error('Failed to load data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  // Load data on mount
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Report handlers
-  const handleSaveReport = useCallback((reportData: Partial<ScheduledReport>) => {
-    if (editingReport) {
-      setReports(prev => prev.map(r =>
-        r.id === editingReport.id ? { ...r, ...reportData } : r
-      ));
-    } else {
-      const newReport: ScheduledReport = {
-        id: `report-${Date.now()}`,
-        name: reportData.name || 'New Report',
-        description: reportData.description || '',
-        frequency: reportData.frequency || 'weekly',
-        nextRun: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        recipients: reportData.recipients || [],
-        metrics: reportData.metrics || [],
-        format: reportData.format || 'pdf',
-        isActive: true,
-        createdAt: new Date(),
-      };
-      setReports(prev => [...prev, newReport]);
+  const handleSaveReport = useCallback(async (reportData: Partial<ScheduledReport>) => {
+    try {
+      if (editingReport) {
+        const updated = await api.reports.updateReport(editingReport.id, {
+          name: reportData.name,
+          description: reportData.description,
+          frequency: reportData.frequency,
+          recipients: reportData.recipients,
+          metrics: reportData.metrics,
+          format: reportData.format,
+        });
+        setReports(prev => prev.map(r =>
+          r.id === editingReport.id ? convertReport(updated) : r
+        ));
+      } else {
+        const created = await api.reports.createReport({
+          name: reportData.name || 'New Report',
+          description: reportData.description || '',
+          frequency: reportData.frequency || 'weekly',
+          recipients: reportData.recipients || [],
+          metrics: reportData.metrics || [],
+          format: reportData.format || 'pdf',
+        });
+        setReports(prev => [convertReport(created), ...prev]);
+      }
+      setEditingReport(undefined);
+    } catch (err) {
+      console.error('Failed to save report:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save report');
     }
-    setEditingReport(undefined);
   }, [editingReport]);
 
-  const handleDeleteReport = useCallback((id: string) => {
-    setReports(prev => prev.filter(r => r.id !== id));
+  const handleDeleteReport = useCallback(async (id: string) => {
+    try {
+      await api.reports.deleteReport(id);
+      setReports(prev => prev.filter(r => r.id !== id));
+    } catch (err) {
+      console.error('Failed to delete report:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete report');
+    }
   }, []);
 
-  const handleToggleReport = useCallback((id: string) => {
-    setReports(prev => prev.map(r =>
-      r.id === id ? { ...r, isActive: !r.isActive } : r
-    ));
+  const handleToggleReport = useCallback(async (id: string) => {
+    const report = reports.find(r => r.id === id);
+    if (!report) return;
+
+    try {
+      const updated = await api.reports.updateReport(id, {
+        is_active: !report.isActive,
+      });
+      setReports(prev => prev.map(r =>
+        r.id === id ? convertReport(updated) : r
+      ));
+    } catch (err) {
+      console.error('Failed to toggle report:', err);
+      setError(err instanceof Error ? err.message : 'Failed to toggle report');
+    }
+  }, [reports]);
+
+  const handleRunReport = useCallback(async (id: string) => {
+    try {
+      const result = await api.reports.runReport(id);
+      console.log('Report running:', result);
+      const updatedReports = await api.reports.listReports();
+      setReports(updatedReports.map(convertReport));
+    } catch (err) {
+      console.error('Failed to run report:', err);
+      setError(err instanceof Error ? err.message : 'Failed to run report');
+    }
   }, []);
 
   // Alert handlers
-  const handleSaveAlert = useCallback((alertData: Partial<Alert>) => {
-    if (editingAlert) {
-      setAlerts(prev => prev.map(a =>
-        a.id === editingAlert.id ? { ...a, ...alertData } : a
-      ));
-    } else {
-      const newAlert: Alert = {
-        id: `alert-${Date.now()}`,
-        name: alertData.name || 'New Alert',
-        metric: alertData.metric || SAMPLE_METRICS[0],
-        operator: alertData.operator || 'greater_than',
-        threshold: alertData.threshold || 0,
-        priority: alertData.priority || 'medium',
-        channels: alertData.channels || ['email'],
-        recipients: alertData.recipients || [],
-        isActive: true,
-        triggerCount: 0,
-        createdAt: new Date(),
-      };
-      setAlerts(prev => [...prev, newAlert]);
+  const handleSaveAlert = useCallback(async (alertData: Partial<Alert>) => {
+    try {
+      if (editingAlert) {
+        const updated = await api.reports.updateAlert(editingAlert.id, {
+          name: alertData.name,
+          metric: alertData.metric,
+          operator: alertData.operator,
+          threshold: alertData.threshold,
+          priority: alertData.priority,
+          channels: alertData.channels,
+          recipients: alertData.recipients,
+        });
+        setAlerts(prev => prev.map(a =>
+          a.id === editingAlert.id ? convertAlert(updated) : a
+        ));
+      } else {
+        const created = await api.reports.createAlert({
+          name: alertData.name || 'New Alert',
+          metric: alertData.metric || SAMPLE_METRICS[0],
+          operator: alertData.operator || 'greater_than',
+          threshold: alertData.threshold || 0,
+          priority: alertData.priority || 'medium',
+          channels: alertData.channels || ['email'],
+          recipients: alertData.recipients || [],
+        });
+        setAlerts(prev => [convertAlert(created), ...prev]);
+      }
+      setEditingAlert(undefined);
+    } catch (err) {
+      console.error('Failed to save alert:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save alert');
     }
-    setEditingAlert(undefined);
   }, [editingAlert]);
 
-  const handleDeleteAlert = useCallback((id: string) => {
-    setAlerts(prev => prev.filter(a => a.id !== id));
+  const handleDeleteAlert = useCallback(async (id: string) => {
+    try {
+      await api.reports.deleteAlert(id);
+      setAlerts(prev => prev.filter(a => a.id !== id));
+    } catch (err) {
+      console.error('Failed to delete alert:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete alert');
+    }
   }, []);
 
-  const handleToggleAlert = useCallback((id: string) => {
-    setAlerts(prev => prev.map(a =>
-      a.id === id ? { ...a, isActive: !a.isActive } : a
-    ));
-  }, []);
+  const handleToggleAlert = useCallback(async (id: string) => {
+    const alert = alerts.find(a => a.id === id);
+    if (!alert) return;
 
-  const handleAcknowledgeAlert = useCallback((id: string) => {
-    setAlertHistory(prev => prev.map(h =>
-      h.id === id ? { ...h, status: 'acknowledged' } : h
-    ));
+    try {
+      const updated = await api.reports.updateAlert(id, {
+        is_active: !alert.isActive,
+      });
+      setAlerts(prev => prev.map(a =>
+        a.id === id ? convertAlert(updated) : a
+      ));
+    } catch (err) {
+      console.error('Failed to toggle alert:', err);
+      setError(err instanceof Error ? err.message : 'Failed to toggle alert');
+    }
+  }, [alerts]);
+
+  const handleAcknowledgeAlert = useCallback(async (id: string) => {
+    try {
+      const updated = await api.reports.acknowledgeAlert(id);
+      setAlertHistory(prev => prev.map(h =>
+        h.id === id ? convertAlertHistory(updated) : h
+      ));
+    } catch (err) {
+      console.error('Failed to acknowledge alert:', err);
+      setError(err instanceof Error ? err.message : 'Failed to acknowledge alert');
+    }
   }, []);
 
   const filteredReports = reports.filter(r =>
@@ -937,17 +996,43 @@ export default function ReportsPage() {
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           <div className="max-w-7xl mx-auto">
+            {/* Error display */}
+            {error && (
+              <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center justify-between">
+                <div className="flex items-center gap-2 text-red-500">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>{error}</span>
+                </div>
+                <button
+                  onClick={() => setError(null)}
+                  className="p-1 hover:bg-red-500/20 rounded"
+                >
+                  <X className="w-4 h-4 text-red-500" />
+                </button>
+              </div>
+            )}
+
             {/* Search and Actions */}
             <div className="flex items-center justify-between mb-6">
-              <div className="relative w-80">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-foreground-muted" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search..."
-                  className="w-full pl-10 pr-4 py-2 bg-surface border border-border rounded-lg text-foreground placeholder:text-foreground-muted focus:outline-none focus:ring-2 focus:ring-brand-600/50"
-                />
+              <div className="flex items-center gap-3">
+                <div className="relative w-80">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-foreground-muted" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search..."
+                    className="w-full pl-10 pr-4 py-2 bg-surface border border-border rounded-lg text-foreground placeholder:text-foreground-muted focus:outline-none focus:ring-2 focus:ring-brand-600/50"
+                  />
+                </div>
+                <button
+                  onClick={loadData}
+                  disabled={isLoading}
+                  className="p-2 hover:bg-surface-hover rounded-lg transition-colors disabled:opacity-50"
+                  title="Refresh"
+                >
+                  <RefreshCw className={`w-5 h-5 text-foreground-muted ${isLoading ? 'animate-spin' : ''}`} />
+                </button>
               </div>
               {activeTab === 'reports' && (
                 <button
@@ -972,7 +1057,11 @@ export default function ReportsPage() {
             {/* Reports Tab */}
             {activeTab === 'reports' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredReports.length === 0 ? (
+                {isLoading ? (
+                  <div className="col-span-full flex items-center justify-center py-16">
+                    <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+                  </div>
+                ) : filteredReports.length === 0 ? (
                   <div className="col-span-full text-center py-16">
                     <Calendar className="w-12 h-12 text-foreground-muted mx-auto mb-4 opacity-50" />
                     <p className="text-foreground-muted">No scheduled reports yet</p>
@@ -994,7 +1083,7 @@ export default function ReportsPage() {
                       }}
                       onDelete={() => handleDeleteReport(report.id)}
                       onToggle={() => handleToggleReport(report.id)}
-                      onRunNow={() => console.log('Run now:', report.id)}
+                      onRunNow={() => handleRunReport(report.id)}
                     />
                   ))
                 )}
@@ -1004,7 +1093,11 @@ export default function ReportsPage() {
             {/* Alerts Tab */}
             {activeTab === 'alerts' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAlerts.length === 0 ? (
+                {isLoading ? (
+                  <div className="col-span-full flex items-center justify-center py-16">
+                    <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+                  </div>
+                ) : filteredAlerts.length === 0 ? (
                   <div className="col-span-full text-center py-16">
                     <Bell className="w-12 h-12 text-foreground-muted mx-auto mb-4 opacity-50" />
                     <p className="text-foreground-muted">No alerts configured yet</p>
@@ -1035,7 +1128,11 @@ export default function ReportsPage() {
             {/* History Tab */}
             {activeTab === 'history' && (
               <div className="space-y-3">
-                {alertHistory.length === 0 ? (
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-16">
+                    <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+                  </div>
+                ) : alertHistory.length === 0 ? (
                   <div className="text-center py-16">
                     <Clock className="w-12 h-12 text-foreground-muted mx-auto mb-4 opacity-50" />
                     <p className="text-foreground-muted">No alert history yet</p>

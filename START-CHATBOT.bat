@@ -16,12 +16,12 @@ set "PROJECT_DIR=%~dp0"
 
 REM ---- STEP 1: Start Backend (hidden) ----
 echo [1/3] Checking backend server...
-netstat -ano | findstr :8001 >nul 2>&1
+netstat -ano | findstr :8000 >nul 2>&1
 if %errorlevel%==0 (
-    echo       Backend already running on port 8001
+    echo       Backend already running on port 8000
 ) else (
     echo       Starting backend server (hidden)...
-    powershell -WindowStyle Hidden -Command "Start-Process -FilePath 'python' -ArgumentList '-m uvicorn src.main_production_with_rag:app --host 0.0.0.0 --port 8001' -WorkingDirectory '%PROJECT_DIR%' -WindowStyle Hidden"
+    powershell -WindowStyle Hidden -Command "Start-Process -FilePath 'python' -ArgumentList '-m uvicorn src.main_production_with_rag:app --host 0.0.0.0 --port 8000' -WorkingDirectory '%PROJECT_DIR%' -WindowStyle Hidden"
     timeout /t 2 /nobreak >nul
     echo       Backend started!
 )
@@ -50,7 +50,7 @@ echo  ========================================
 echo   ALL SERVICES STARTED SUCCESSFULLY!
 echo  ========================================
 echo.
-echo   Backend:   http://localhost:8001
+echo   Backend:   http://localhost:8000
 echo   Frontend:  http://localhost:3000
 echo   Chatbot:   Press Ctrl+Shift+M to toggle
 echo.

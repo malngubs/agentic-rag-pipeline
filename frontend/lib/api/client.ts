@@ -24,6 +24,24 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
+// Debug mode - enable verbose logging
+const DEBUG = process.env.NEXT_PUBLIC_DEBUG === 'true';
+
+// Debug logger
+const debug = {
+  log: (...args: any[]) => DEBUG && console.log('[API Client]', ...args),
+  error: (...args: any[]) => console.error('[API Client]', ...args),
+  warn: (...args: any[]) => console.warn('[API Client]', ...args),
+};
+
+// Log configuration on load (always, for troubleshooting)
+if (typeof window !== 'undefined') {
+  console.log('🔧 Macrocomm API Client Configuration:');
+  console.log('   API URL:', API_BASE_URL);
+  console.log('   WebSocket URL:', WS_BASE_URL);
+  console.log('   Debug Mode:', DEBUG ? 'ENABLED' : 'disabled');
+}
+
 // Default request options
 const defaultHeaders: HeadersInit = {
   'Content-Type': 'application/json',
@@ -95,12 +113,24 @@ async function post<T>(endpoint: string, data?: any): Promise<T> {
   return handleResponse<T>(response);
 }
 
+async function del<T>(endpoint: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'DELETE',
+    headers: defaultHeaders,
+  });
+
+  return handleResponse<T>(response);
+}
+
 async function uploadFile<T>(
   endpoint: string,
   file: File,
   additionalData?: Record<string, string>,
   onProgress?: (progress: number) => void
 ): Promise<T> {
+  const uploadUrl = `${API_BASE_URL}${endpoint}`;
+  debug.log(`📤 Uploading file: ${file.name} (${file.size} bytes) to ${uploadUrl}`);
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
@@ -116,11 +146,13 @@ async function uploadFile<T>(
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable && onProgress) {
         const progress = Math.round((event.loaded / event.total) * 100);
+        debug.log(`📤 Upload progress: ${progress}%`);
         onProgress(progress);
       }
     });
     
     xhr.addEventListener('load', () => {
+      debug.log(`📤 Upload complete. Status: ${xhr.status}`);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(JSON.parse(xhr.responseText));
@@ -128,15 +160,23 @@ async function uploadFile<T>(
           resolve(xhr.responseText as unknown as T);
         }
       } else {
+        debug.error(`📤 Upload failed with status ${xhr.status}: ${xhr.statusText}`);
         reject(new ApiError(xhr.status, xhr.statusText));
       }
     });
     
-    xhr.addEventListener('error', () => {
+    xhr.addEventListener('error', (event) => {
+      debug.error(`📤 Upload network error. URL: ${uploadUrl}`, event);
+      debug.error('💡 Check: 1) Backend running on port 8000? 2) CORS enabled? 3) Firewall?');
       reject(new ApiError(0, 'Network error'));
     });
     
-    xhr.open('POST', `${API_BASE_URL}${endpoint}`);
+    xhr.addEventListener('abort', () => {
+      debug.warn('📤 Upload aborted');
+      reject(new ApiError(0, 'Upload aborted'));
+    });
+    
+    xhr.open('POST', uploadUrl);
     xhr.send(formData);
   });
 }
@@ -228,10 +268,12 @@ export class ChatWebSocket {
       try {
         // Connect to the streaming WebSocket endpoint
         const wsUrl = `${WS_BASE_URL}/ws/chat/stream`;
+        debug.log(`🔌 Connecting to WebSocket: ${wsUrl}`);
         this.ws = new WebSocket(wsUrl);
-        
+ 
         this.ws.onopen = () => {
-          console.log('✅ WebSocket connected to backend');
+          console.log('✅ WebSocket connected to backend:', wsUrl);
+          debug.log('🔌 WebSocket connection established successfully');
           this.reconnectAttempts = 0;
           resolve();
         };
@@ -299,19 +341,23 @@ export class ChatWebSocket {
         };
         
         this.ws.onerror = (event) => {
-          console.error('❌ WebSocket error:', event);
+          debug.error('❌ WebSocket error:', event);
+          debug.error('💡 Check: 1) Backend running? 2) Port 8000 accessible? 3) Firewall?');
+          debug.error(`   Attempted URL: ${WS_BASE_URL}/ws/chat/stream`);
           this.onError(new Error('WebSocket connection error'));
+          reject(new Error('WebSocket connection error'));
         };
-        
+ 
         this.ws.onclose = (event) => {
-          console.log('🔌 WebSocket closed:', event.code, event.reason);
+          debug.log(`🔌 WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'none'}, Clean: ${event.wasClean}`);
           if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`🔄 Reconnecting... attempt ${this.reconnectAttempts}`);
+            debug.log(`🔄 Reconnecting... attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
             setTimeout(() => this.connect(), 1000 * this.reconnectAttempts);
           }
         };
       } catch (e) {
+        debug.error('❌ Failed to create WebSocket:', e);
         reject(e);
       }
     });
@@ -349,13 +395,14 @@ export class ChatWebSocket {
 // =============================================================================
 
 export interface Document {
-  id: string;
-  name: string;
+  doc_id: string;
+  filename: string;
   file_type: string;
-  size: number;
-  chunks: number;
-  uploaded_at: string;
+  file_size: number;
+  chunk_count: number;
+  upload_date: string;
   status: string;
+  error_message?: string;
 }
 
 export interface DocumentListResponse {
@@ -597,8 +644,18 @@ export const sessionApi = {
     sessionId: string,
     file: File,
     onProgress?: (progress: number) => void
-  ): Promise<{ success: boolean; file_name: string; rows: number; columns: number }> {
+  ): Promise<{ success: boolean; file_name: string; rows: number; columns: number; dataset_id?: string }> {
     return uploadFile(`/api/sessions/${sessionId}/upload`, file, undefined, onProgress);
+  },
+
+  /**
+   * Load active dataset from DatasetManager into session
+   * Endpoint: POST /api/sessions/{id}/load-active-dataset
+   */
+  async loadActiveDataset(
+    sessionId: string
+  ): Promise<{ success: boolean; message: string; file_name: string; rows: number; columns: number; dataset_id: string }> {
+    return post(`/api/sessions/${sessionId}/load-active-dataset`, {});
   },
 
   /**
@@ -1081,6 +1138,25 @@ export const transformApi = {
 // NATURAL LANGUAGE QUERY API - Tier 2 Feature
 // =============================================================================
 
+export interface NLToSQLResult {
+  generated_sql: string;
+  table_name: string;
+  columns: string[];
+  column_types: Record<string, string>;
+  explanation: string;
+  generation_time: number;
+}
+ 
+export interface SQLExecutionResult {
+  columns: string[];
+  data: any[][];
+  row_count: number;
+  column_count: number;
+  execution_time: number;
+  explanation: string;
+}
+ 
+// Legacy interface for backward compatibility
 export interface NLQueryResult {
   natural_query: string;
   generated_sql: string;
@@ -1090,7 +1166,7 @@ export interface NLQueryResult {
   row_count: number;
   execution_time: number;
 }
-
+ 
 export const nlQueryApi = {
   /**
    * Convert natural language to SQL
@@ -1098,17 +1174,17 @@ export const nlQueryApi = {
   async generateSql(
     sessionId: string,
     query: string
-  ): Promise<{ sql: string; explanation: string }> {
+  ): Promise<NLToSQLResult> {
     return post(`/api/sessions/${sessionId}/nl-to-sql`, { query });
   },
-
+ 
   /**
    * Execute generated SQL
    */
   async executeSql(
     sessionId: string,
     sql: string
-  ): Promise<NLQueryResult> {
+  ): Promise<SQLExecutionResult> {
     return post(`/api/sessions/${sessionId}/execute-sql`, { sql });
   },
 
@@ -1156,9 +1232,194 @@ export async function checkApiHealth(): Promise<boolean> {
 }
 
 // =============================================================================
-// DEFAULT EXPORT
+// 📊 UNIFIED DATASET API (Upload Once, Use Everywhere)
 // =============================================================================
 
+export interface DatasetMetadata {
+  id: string;
+  filename: string;
+  original_filename: string;
+  file_size: number;
+  file_type: string;
+  upload_time: string;
+  status: 'pending' | 'processing' | 'ready' | 'error';
+  row_count: number;
+  column_count: number;
+  columns: Array<{
+    name: string;
+    dtype: string;
+    non_null_count: number;
+    null_count: number;
+    unique_count: number;
+    sample_values: any[];
+    min_value?: number;
+    max_value?: number;
+    mean_value?: number;
+    top_values?: Array<[string, number]>;
+  }>;
+  sheets?: string[];
+  vector_chunks: number;
+  is_active?: boolean;
+  error_message?: string;
+}
+ 
+export interface DatasetUploadResponse {
+  success: boolean;
+  dataset_id: string;
+  filename: string;
+  file_size: number;
+  file_type: string;
+  row_count: number;
+  column_count: number;
+  columns: any[];
+  vector_chunks: number;
+  is_active: boolean;
+  message: string;
+}
+ 
+export interface DatasetListResponse {
+  datasets: DatasetMetadata[];
+  total: number;
+  active_dataset_id: string | null;
+}
+ 
+export const datasetApi = {
+  /**
+   * Upload a dataset for use across all features
+   * Endpoint: POST /api/datasets/upload
+   */
+  async upload(
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<DatasetUploadResponse> {
+    debug.log(`📤 Uploading dataset: ${file.name}`);
+ 
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+ 
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          onProgress(progress);
+        }
+      });
+ 
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const response = JSON.parse(xhr.responseText);
+          debug.log('✅ Dataset upload successful:', response);
+          resolve(response);
+        } else {
+          const error = JSON.parse(xhr.responseText);
+          debug.error('❌ Dataset upload failed:', error);
+          reject(new ApiError(xhr.status, error.detail || 'Upload failed', error));
+        }
+      });
+ 
+      xhr.addEventListener('error', () => {
+        debug.error('❌ Dataset upload network error');
+        reject(new Error('Network error during upload'));
+      });
+ 
+      xhr.open('POST', `${API_BASE_URL}/api/datasets/upload`);
+      xhr.send(formData);
+    });
+  },
+ 
+  /**
+   * List all uploaded datasets
+   * Endpoint: GET /api/datasets
+   */
+  async list(): Promise<DatasetListResponse> {
+    debug.log('📋 Fetching dataset list');
+    return get<DatasetListResponse>('/api/datasets');
+  },
+ 
+  /**
+   * Get the active dataset
+   * Endpoint: GET /api/datasets/active
+   */
+  async getActive(): Promise<{ active: boolean; dataset?: DatasetMetadata; is_tabular?: boolean }> {
+    debug.log('📌 Fetching active dataset');
+    return get('/api/datasets/active');
+  },
+ 
+  /**
+   * Set the active dataset
+   * Endpoint: POST /api/datasets/active
+   */
+  async setActive(datasetId: string): Promise<{ success: boolean; active_dataset?: DatasetMetadata }> {
+    debug.log(`📌 Setting active dataset: ${datasetId}`);
+    return post('/api/datasets/active', { dataset_id: datasetId });
+  },
+ 
+  /**
+   * Get details for a specific dataset
+   * Endpoint: GET /api/datasets/{dataset_id}
+   */
+  async get(datasetId: string): Promise<DatasetMetadata> {
+    debug.log(`📊 Fetching dataset: ${datasetId}`);
+    return get(`/api/datasets/${datasetId}`);
+  },
+ 
+  /**
+   * Delete a dataset
+   * Endpoint: DELETE /api/datasets/{dataset_id}
+   */
+  async delete(datasetId: string): Promise<{ success: boolean; deleted: string }> {
+    debug.log(`🗑️ Deleting dataset: ${datasetId}`);
+    return del(`/api/datasets/${datasetId}`);
+  },
+ 
+  /**
+   * Get dataset data (paginated)
+   * Endpoint: GET /api/datasets/{dataset_id}/data
+   */
+  async getData(
+    datasetId: string,
+    offset: number = 0,
+    limit: number = 100,
+    columns?: string[]
+  ): Promise<{
+    data: any[];
+    total_rows: number;
+    offset: number;
+    limit: number;
+    columns: string[];
+  }> {
+    debug.log(`📊 Fetching data for dataset: ${datasetId}`);
+    const params: Record<string, string> = {
+      offset: offset.toString(),
+      limit: limit.toString(),
+    };
+    if (columns && columns.length > 0) {
+      params.columns = columns.join(',');
+    }
+    return get(`/api/datasets/${datasetId}/data`, params);
+  },
+ 
+  /**
+   * Get dataset manager statistics
+   * Endpoint: GET /api/datasets/stats
+   */
+  async getStats(): Promise<{
+    total_datasets: number;
+    active_dataset_id: string | null;
+    active_dataset_name: string | null;
+    total_rows: number;
+    total_vector_chunks: number;
+  }> {
+    debug.log('📈 Fetching dataset stats');
+    return get('/api/datasets/stats');
+  },
+};
+ 
+// =============================================================================
+// DEFAULT EXPORT
+// =============================================================================
+ 
 export const api = {
   chat: chatApi,
   document: documentApi,
@@ -1169,9 +1430,5 @@ export const api = {
   collaboration: collaborationApi,
   transform: transformApi,
   nlQuery: nlQueryApi,
-  checkHealth,
-  checkApiHealth,
-  ChatWebSocket,
+  dataset: datasetApi,
 };
-
-export default api;

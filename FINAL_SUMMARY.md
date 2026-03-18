@@ -54,7 +54,7 @@ User sees visualization inline in chat
 
 4. `desktop-app/src/main.js`
    - Added IPC handler for opening dashboard (lines 285-289)
-   - Confirmed port 8001 configuration (line 13)
+   - Confirmed port 8000 configuration (line 13)
 
 **How It Works:**
 ```
@@ -95,8 +95,8 @@ Browser opens to BI Platform
 
 **Port Configuration:**
 - Backend: port 8000 (running)
-- Frontend: configured for 8001 (needs update to 8000)
-- Desktop app: configured for 8001 (needs update to 8000)
+- Frontend: configured for 8000 (needs update to 8000)
+- Desktop app: configured for 8000 (needs update to 8000)
 
 **Result:** Backend verified healthy, frontend/desktop need port update
 
@@ -221,14 +221,14 @@ echo 'NEXT_PUBLIC_WS_URL=ws://localhost:8000' >> .env.local
 **Desktop App:**
 Edit `desktop-app/src/main.js` line 13:
 ```javascript
-apiUrl: 'http://localhost:8000',  // Changed from 8001
+apiUrl: 'http://localhost:8000',  // Changed from 8000
 ```
 
-### Option B: Fix Backend to use 8001
+### Option B: Fix Backend to use 8000
 
 Check `.env` file has:
 ```
-API_PORT=8001
+API_PORT=8000
 API_HOST=127.0.0.1
 ```
 

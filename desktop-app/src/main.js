@@ -12,7 +12,7 @@ const http = require('http');
 // Initialize persistent storage
 const store = new Store({
     defaults: {
-        apiUrl: 'http://localhost:8001',
+        apiUrl: 'http://localhost:8000',  // Backend API port (matches uvicorn)
         frontendUrl: 'http://localhost:3000',
         autoStart: true,
         alwaysOnTop: true,
@@ -346,11 +346,11 @@ function setupIPC() {
         }
     });
 
-    // Open BI Platform dashboard
+    // Open BI Platform (opens to Chat page, not dashboards)
     ipcMain.on('open-dashboard', () => {
         const { shell } = require('electron');
-        shell.openExternal('http://localhost:3000');
-        console.log('📊 Opening BI Platform in browser');
+        shell.openExternal('http://localhost:3000/chat');
+        console.log('🚀 Opening BI Platform Chat in browser');
     });
 
     // Show notification

@@ -49,6 +49,7 @@ from .file_ingestor import (
     FileIngestor,
     ExtractionResult,
     ExtractedTable,
+    clean_dataframe,
 )
 
 # =============================================================================
@@ -121,6 +122,7 @@ __all__ = [
     "FileIngestor",
     "ExtractionResult",
     "ExtractedTable",
+    "clean_dataframe",
     
     # Data Profiler
     "DataProfiler",

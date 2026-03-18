@@ -11,9 +11,9 @@ echo   STOPPING MACROCOMM SERVICES
 echo  ========================================
 echo.
 
-REM Kill Backend (port 8001)
+REM Kill Backend (port 8000)
 echo [1/3] Stopping backend server...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8001 ^| findstr LISTENING') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
     taskkill /F /PID %%a >nul 2>&1
 )
 echo       Backend stopped.

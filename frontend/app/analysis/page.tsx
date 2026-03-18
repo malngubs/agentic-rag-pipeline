@@ -136,7 +136,7 @@ const QualityBadge: React.FC<{ level: string; score: number }> = ({ level, score
     <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border ${colors[level] || colors.Fair}`}>
       <CheckCircle2 className="w-4 h-4" />
       <span className="font-medium">{level}</span>
-      <span className="text-sm opacity-75">({score}%)</span>
+      <span className="text-sm opacity-75">({score.toFixed(2)}%)</span>
     </div>
   );
 };
@@ -293,7 +293,7 @@ const DataOverview: React.FC<DataOverviewProps> = ({ session, profile, insights,
       />
       <StatCard
         label="Quality Score"
-        value={`${profile?.quality_score || 0}%`}
+        value={`${(profile?.quality_score || 0).toFixed(2)}%`}
         icon={Target}
       />
     </div>
@@ -487,19 +487,39 @@ const DataProfileTab: React.FC<DataProfileTabProps> = ({ profile, isLoading }) =
 interface StatisticsTabProps {
   sessionId: string;
   columns: ColumnInfo[];
+onSessionExpired?: () => void;
 }
-
-const StatisticsTab: React.FC<StatisticsTabProps> = ({ sessionId, columns }) => {
+ 
+const StatisticsTab: React.FC<StatisticsTabProps> = ({ sessionId, columns, onSessionExpired }) => {
   const [selectedTest, setSelectedTest] = useState<string>('correlation');
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [result, setResult] = useState<StatisticalResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  const [sessionValid, setSessionValid] = useState<boolean>(true);
+  const [isValidating, setIsValidating] = useState<boolean>(true);
+ 
+  // Validate session on mount
+  useEffect(() => {
+    const validateSession = async () => {
+      setIsValidating(true);
+      try {
+        await api.session.get(sessionId);
+        setSessionValid(true);
+      } catch (err) {
+        setSessionValid(false);
+        setError('Session expired. Please re-upload your data.');
+      } finally {
+        setIsValidating(false);
+      }
+    };
+    validateSession();
+  }, [sessionId]);
+ 
   const numericColumns = columns.filter(
     (c) => c.type === 'int64' || c.type === 'float64' || c.semantic_type.includes('numeric')
   );
-
+ 
   const tests = [
     { id: 'correlation', name: 'Correlation Analysis', desc: 'Measure relationship strength', minCols: 2 },
     { id: 't_test', name: 'T-Test', desc: 'Compare two group means', minCols: 2 },
@@ -507,25 +527,63 @@ const StatisticsTab: React.FC<StatisticsTabProps> = ({ sessionId, columns }) => 
     { id: 'chi_square', name: 'Chi-Square', desc: 'Test independence', minCols: 2 },
     { id: 'regression', name: 'Linear Regression', desc: 'Predict relationships', minCols: 2 },
   ];
-
+ 
   const runTest = async () => {
     if (selectedColumns.length < 2) {
       setError('Please select at least 2 columns');
       return;
     }
-
+ 
     setIsRunning(true);
     setError(null);
-
+ 
     try {
       const res = await api.session.runStatistics(sessionId, selectedTest, selectedColumns);
       setResult(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to run test');
+    } catch (err: any) {
+      // Check for session not found error
+      const errorMessage = err?.message || err?.data?.detail || 'Failed to run test';
+      if (errorMessage.toLowerCase().includes('session not found') || errorMessage.toLowerCase().includes('session expired')) {
+        setSessionValid(false);
+        setError('Session expired. Please re-upload your data to continue.');
+        if (onSessionExpired) onSessionExpired();
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setIsRunning(false);
     }
   };
+ 
+  // Show loading while validating session
+  if (isValidating) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+        <span className="ml-3 text-foreground-muted">Validating session...</span>
+      </div>
+    );
+  }
+ 
+  // Show session expired message
+  if (!sessionValid) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16">
+        <AlertCircle className="w-12 h-12 text-amber-500 mb-4" />
+        <h3 className="text-lg font-semibold text-foreground mb-2">Session Expired</h3>
+        <p className="text-foreground-muted text-center max-w-md mb-6">
+          Your analysis session has expired. This can happen if the server was restarted
+          or if your session timed out. Please re-upload your data to continue.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors"
+        >
+          Reload & Re-upload Data
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -682,20 +740,40 @@ const StatisticsTab: React.FC<StatisticsTabProps> = ({ sessionId, columns }) => 
 interface ForecastTabProps {
   sessionId: string;
   columns: ColumnInfo[];
+onSessionExpired?: () => void;
 }
-
-const ForecastTab: React.FC<ForecastTabProps> = ({ sessionId, columns }) => {
+ 
+const ForecastTab: React.FC<ForecastTabProps> = ({ sessionId, columns, onSessionExpired }) => {
   const [selectedColumn, setSelectedColumn] = useState<string>('');
   const [periods, setPeriods] = useState(12);
   const [method, setMethod] = useState<string>('auto');
   const [result, setResult] = useState<ForecastResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  const [sessionValid, setSessionValid] = useState<boolean>(true);
+  const [isValidating, setIsValidating] = useState<boolean>(true);
+ 
+  // Validate session on mount
+  useEffect(() => {
+    const validateSession = async () => {
+      setIsValidating(true);
+      try {
+        await api.session.get(sessionId);
+        setSessionValid(true);
+      } catch (err) {
+        setSessionValid(false);
+        setError('Session expired. Please re-upload your data.');
+      } finally {
+        setIsValidating(false);
+      }
+    };
+    validateSession();
+  }, [sessionId]);
+ 
   const numericColumns = columns.filter(
     (c) => c.type === 'int64' || c.type === 'float64'
   );
-
+ 
   const methods = [
     { id: 'auto', name: 'Auto-Select', desc: 'Best method for your data' },
     { id: 'moving_average', name: 'Moving Average', desc: 'Simple trend smoothing' },
@@ -704,25 +782,62 @@ const ForecastTab: React.FC<ForecastTabProps> = ({ sessionId, columns }) => {
     { id: 'holt_winters', name: 'Holt-Winters', desc: 'Seasonal patterns' },
     { id: 'linear', name: 'Linear Trend', desc: 'Straight line projection' },
   ];
-
+ 
   const runForecast = async () => {
     if (!selectedColumn) {
       setError('Please select a column to forecast');
       return;
     }
-
+ 
     setIsRunning(true);
     setError(null);
-
+ 
     try {
       const res = await api.session.forecast(sessionId, selectedColumn, periods, method);
       setResult(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to run forecast');
+    } catch (err: any) {
+      const errorMessage = err?.message || err?.data?.detail || 'Failed to run forecast';
+      if (errorMessage.toLowerCase().includes('session not found') || errorMessage.toLowerCase().includes('session expired')) {
+        setSessionValid(false);
+        setError('Session expired. Please re-upload your data to continue.');
+        if (onSessionExpired) onSessionExpired();
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setIsRunning(false);
     }
   };
+ 
+  // Show loading while validating session
+  if (isValidating) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+        <span className="ml-3 text-foreground-muted">Validating session...</span>
+      </div>
+    );
+  }
+ 
+  // Show session expired message
+  if (!sessionValid) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16">
+        <AlertCircle className="w-12 h-12 text-amber-500 mb-4" />
+        <h3 className="text-lg font-semibold text-foreground mb-2">Session Expired</h3>
+        <p className="text-foreground-muted text-center max-w-md mb-6">
+          Your analysis session has expired. This can happen if the server was restarted
+          or if your session timed out. Please re-upload your data to continue.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors"
+        >
+          Reload & Re-upload Data
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1050,14 +1165,20 @@ export default function AnalysisPage() {
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Create session on mount
+  // Create session on mount - auto-loads active dataset if available
   useEffect(() => {
     const initSession = async () => {
       try {
         const newSession = await api.session.create();
         setSession(newSession);
+ 
+        // Show notification if data was auto-loaded from active dataset
+        if (newSession.data_loaded && newSession.file_name) {
+          console.log(`📊 Auto-loaded active dataset: ${newSession.file_name}`);
+        }
       } catch (err) {
         console.error('Failed to create session:', err);
+        setError('Failed to initialize analysis session');
       }
     };
     initSession();
@@ -1177,6 +1298,32 @@ export default function AnalysisPage() {
             />
           ) : (
             <>
+              {/* Active Dataset Info */}
+              <div className="mb-6 p-4 bg-brand-500/5 border border-brand-500/20 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-brand-500/20 flex items-center justify-center">
+                    <FileSpreadsheet className="w-5 h-5 text-brand-500" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">{session.file_name}</p>
+                    <p className="text-sm text-foreground-muted">
+                      {session.row_count?.toLocaleString()} rows · {session.column_count} columns
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    // Reset session to allow new upload
+                    setSession(prev => prev ? { ...prev, data_loaded: false, file_name: undefined } : null);
+                    setProfile(null);
+                    setInsights(null);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-brand-500 hover:bg-brand-500/10 rounded-lg transition-colors"
+                >
+                  Change Dataset
+                </button>
+              </div>
+
               {/* Tabs */}
               <div className="flex items-center gap-1 mb-6 p-1 bg-surface-muted rounded-xl">
                 {tabs.map((tab) => (
@@ -1222,11 +1369,21 @@ export default function AnalysisPage() {
                     <StatisticsTab
                       sessionId={session.id}
                       columns={profile?.columns || []}
+                      onSessionExpired={() => {
+                        setSession(prev => prev ? { ...prev, data_loaded: false } : null);
+                        setProfile(null);
+                        setInsights([]);
+                      }}
                     />
                   )}
                   {activeTab === 'forecast' && session?.id && (
                     <ForecastTab
                       sessionId={session.id}
+                      onSessionExpired={() => {
+                        setSession(prev => prev ? { ...prev, data_loaded: false } : null);
+                        setProfile(null);
+                        setInsights([]);
+                      }}
                       columns={profile?.columns || []}
                     />
                   )}

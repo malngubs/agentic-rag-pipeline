@@ -18,7 +18,7 @@ npm install --save-dev @types/plotly.js
 
 ## 2. Fix Port Configuration (REQUIRED)
 
-The backend runs on port 8000, but frontend is configured for 8001. Fix this:
+The backend runs on port 8000, but frontend is configured for 8000. Fix this:
 
 ### Update Frontend .env.local:
 ```bash
@@ -35,7 +35,7 @@ echo NEXT_PUBLIC_WS_URL=ws://localhost:8000 >> .env.local
 ### Update Desktop App (Optional - if backend stays on 8000):
 Edit `desktop-app/src/main.js` line 13:
 ```javascript
-apiUrl: 'http://localhost:8000',  // Changed from 8001
+apiUrl: 'http://localhost:8000',  // Changed from 8000
 ```
 
 ## 3. Verify Qdrant is Running
@@ -438,7 +438,7 @@ netstat -ano | findstr :8000
 taskkill /PID <PID> /F
 
 # Or use a different port - edit .env
-API_PORT=8001
+API_PORT=8000
 ```
 
 ### Problem: Qdrant connection failed

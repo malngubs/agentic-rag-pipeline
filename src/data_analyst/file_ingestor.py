@@ -520,11 +520,46 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(how='all')
     df = df.dropna(axis=1, how='all')
     
-    # Clean column names
-    df.columns = [
-        str(col).strip().replace('\n', ' ').replace('\r', '')
-        for col in df.columns
-    ]
+    # Clean and sanitize column names for SQL compatibility
+    def sanitize_column_name(col_name: str, index: int) -> str:
+        """Sanitize a column name to be SQL-safe"""
+        col = str(col_name).strip()
+
+        # Handle unnamed columns (pandas creates these as "Unnamed: 0", "Unnamed: 1", etc.)
+        if col.lower().startswith('unnamed'):
+            return f'column_{index}'
+
+        # Replace problematic characters with underscores
+        # Colons, spaces, hyphens, dots, and other special chars break SQL
+        import re
+        col = re.sub(r'[:\s\-\.\(\)\[\]\{\}\+\*\/\\@#$%^&!=<>,;\'\"]+', '_', col)
+
+        # Remove leading/trailing underscores
+        col = col.strip('_')
+
+        # Ensure it doesn't start with a number (invalid SQL identifier)
+        if col and col[0].isdigit():
+            col = f'col_{col}'
+
+        # If empty after sanitization, use index-based name
+        if not col:
+            return f'column_{index}'
+
+        return col
+
+    # Apply sanitization to all columns
+    new_columns = []
+    seen_names = set()
+    for i, col in enumerate(df.columns):
+        sanitized = sanitize_column_name(col, i)
+
+        # Handle duplicate column names by appending index
+        if sanitized in seen_names:
+            sanitized = f'{sanitized}_{i}'
+        seen_names.add(sanitized)
+        new_columns.append(sanitized)
+
+    df.columns = new_columns
     
     # Replace empty strings with NaN
     df = df.replace(r'^\s*$', np.nan, regex=True)

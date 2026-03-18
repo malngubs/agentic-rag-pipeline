@@ -8,10 +8,10 @@
 # 📋 PRE-TEST CHECKLIST
 
 ## ✅ Fixed Issues:
-- [x] Backend port changed from 8000 to 8001 (Windows permission fix)
+- [x] Backend port changed from 8000 to 8000 (Windows permission fix)
 - [x] Admin portal upload endpoint fixed (`/api/upload` instead of `/api/documents/upload`)
-- [x] Desktop app port updated to 8001
-- [x] Frontend environment variables point to port 8001
+- [x] Desktop app port updated to 8000
+- [x] Frontend environment variables point to port 8000
 - [x] All visualization components created (ChartWidget, KPICard, DashboardWidget, DataTable)
 
 ## ✅ Backend API Endpoints Verified:
@@ -56,18 +56,18 @@ python src/main_production_with_rag.py
 ✅ Qdrant connection successful
 ✅ RAG system initialized
 ✅ Analytics database initialized
-✅ Server running on http://127.0.0.1:8001
+✅ Server running on http://127.0.0.1:8000
 ```
 
 **Verify:**
 - [ ] Backend starts without errors
-- [ ] Port 8001 is accessible
+- [ ] Port 8000 is accessible
 - [ ] Qdrant connection successful
 - [ ] No import errors
 
 **Test Health Endpoint:**
 ```bash
-curl http://localhost:8001/health
+curl http://localhost:8000/health
 ```
 
 **Expected Response:**
@@ -460,7 +460,7 @@ npm start
 | # | Component | Issue | Severity | Status |
 |---|-----------|-------|----------|--------|
 | 1 | Admin Portal | Upload endpoint was `/api/documents/upload` instead of `/api/upload` | High | ✅ Fixed |
-| 2 | Desktop App | Port was 8000 instead of 8001 | High | ✅ Fixed |
+| 2 | Desktop App | Port was 8000 instead of 8000 | High | ✅ Fixed |
 | 3 | Desktop App | No dashboard button to open BI Platform | Medium | ⚠️ Pending |
 | 4 | ChatInterface | Visualization components not integrated | High | ⚠️ Pending |
 | 5 | | | | |
@@ -471,7 +471,7 @@ npm start
 
 ## Must Pass:
 
-- [ ] Backend starts without errors on port 8001
+- [ ] Backend starts without errors on port 8000
 - [ ] Frontend loads all pages (landing, BI platform, admin)
 - [ ] File upload works in both BI Platform and Admin
 - [ ] Charts render inline in chat messages

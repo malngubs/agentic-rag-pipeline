@@ -133,21 +133,28 @@ const SqlEditor: React.FC<{
   isRunning: boolean;
   isEditing: boolean;
   onEditToggle: () => void;
-}> = ({ sql, onChange, onRun, isRunning, isEditing, onEditToggle }) => {
+tableName?: string;
+  explanation?: string;
+}> = ({ sql, onChange, onRun, isRunning, isEditing, onEditToggle, tableName, explanation }) => {
   const [copied, setCopied] = useState(false);
-
+ 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(sql);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
+ 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 bg-surface-muted border-b border-border">
         <div className="flex items-center gap-2">
           <Code className="w-4 h-4 text-brand-500" />
           <span className="text-sm font-medium text-foreground">Generated SQL</span>
+          {tableName && (
+            <span className="px-2 py-0.5 text-xs bg-emerald-500/10 text-emerald-600 rounded-full">
+              Table: {tableName}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -168,6 +175,17 @@ const SqlEditor: React.FC<{
           </button>
         </div>
       </div>
+ 
+      {/* AI Explanation for generated SQL */}
+      {explanation && !isEditing && (
+        <div className="px-4 py-3 bg-brand-600/5 border-b border-brand-500/10">
+          <div className="flex items-start gap-2">
+            <Sparkles className="w-4 h-4 text-brand-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-foreground-secondary">{explanation}</p>
+          </div>
+        </div>
+      )}
+ 
       <div className="p-4">
         {isEditing ? (
           <textarea
@@ -182,19 +200,26 @@ const SqlEditor: React.FC<{
           </pre>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2 px-4 py-3 bg-surface-muted border-t border-border">
-        <button
-          onClick={onRun}
-          disabled={isRunning || !sql}
-          className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-        >
-          {isRunning ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Play className="w-4 h-4" />
-          )}
-          Run Query
-        </button>
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-muted border-t border-border">
+        {isEditing && (
+          <p className="text-xs text-foreground-muted">
+            You can modify the SQL query before running it
+          </p>
+        )}
+        <div className={`flex items-center gap-2 ${!isEditing ? 'ml-auto' : ''}`}>
+          <button
+            onClick={onRun}
+            disabled={isRunning || !sql}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {isRunning ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4" />
+            )}
+            Run Query
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -324,14 +349,26 @@ export default function NLQueryPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize session
+  // Initialize session - auto-loads active dataset if available
   useEffect(() => {
     const initSession = async () => {
       try {
         const newSession = await api.session.create();
         setSession(newSession);
+ 
+        // If data was auto-loaded from active dataset, also load profile
+        if (newSession.data_loaded && newSession.file_name) {
+          console.log(`📊 Auto-loaded active dataset: ${newSession.file_name}`);
+          try {
+            const profileData = await api.session.getProfile(newSession.id);
+            setProfile(profileData);
+          } catch (profileErr) {
+            console.warn('Could not load profile:', profileErr);
+          }
+        }
       } catch (err) {
         console.error('Failed to create session:', err);
+        setError('Failed to initialize session');
       }
     };
     initSession();
@@ -369,62 +406,57 @@ export default function NLQueryPage() {
     }
   }, [session]);
 
-  // Generate SQL from natural language
+  // Store the table name from SQL generation for reference
+  const [tableName, setTableName] = useState<string>('');
+  const [sqlExplanation, setSqlExplanation] = useState<string>('');
+ 
+  // Generate SQL from natural language using the backend API
   const handleGenerateSql = useCallback(async () => {
     if (!session?.id || !naturalQuery.trim()) return;
-
+ 
     setIsGenerating(true);
     setError(null);
-
+    setResult(null); // Clear previous results
+ 
     try {
-      // Call the backend to generate SQL from natural language
-      const response = await api.session.query(session.id, naturalQuery);
-
-      // Extract generated SQL from response
-      const sql = response.generated_sql || response.sql || generateMockSql(naturalQuery, profile);
-      setGeneratedSql(sql);
-
-      // If backend returns results directly, use them
-      if (response.data || response.results) {
-        setResult({
-          columns: response.columns || [],
-          data: response.data || response.results || [],
-          rowCount: response.row_count || (response.data || []).length,
-          executionTime: response.execution_time || 0,
-          generatedSql: sql,
-          explanation: response.explanation || 'Query generated and executed successfully.',
-        });
-      }
-    } catch (err) {
-      // If API fails, generate mock SQL for demo
-      const mockSql = generateMockSql(naturalQuery, profile);
-      setGeneratedSql(mockSql);
+      // Use the dedicated NL-to-SQL endpoint
+      const response = await api.nlQuery.generateSql(session.id, naturalQuery);
+ 
+      // Set the generated SQL and metadata
+      setGeneratedSql(response.generated_sql);
+      setTableName(response.table_name);
+      setSqlExplanation(response.explanation);
+ 
+    } catch (err: any) {
+      const errorMessage = err?.message || err?.data?.detail || 'Failed to generate SQL';
+      setError(errorMessage);
     } finally {
       setIsGenerating(false);
     }
-  }, [session?.id, naturalQuery, profile]);
-
-  // Run the generated SQL
+  }, [session?.id, naturalQuery]);
+ 
+  // Run the generated SQL using the backend execute-sql endpoint
   const handleRunSql = useCallback(async () => {
     if (!session?.id || !generatedSql) return;
-
+ 
     setIsRunning(true);
     setError(null);
-
+ 
     try {
-      const response = await api.session.query(session.id, `EXECUTE SQL: ${generatedSql}`);
-
+      // Use the dedicated execute-sql endpoint
+      const response = await api.nlQuery.executeSql(session.id, generatedSql);
+ 
       const queryResult: QueryResult = {
-        columns: response.columns || profile?.columns.map(c => c.name) || [],
-        data: response.data || generateMockData(profile),
-        rowCount: response.row_count || 100,
-        executionTime: response.execution_time || Math.random() * 50 + 10,
+        columns: response.columns,
+        data: response.data,
+        rowCount: response.row_count,
+        executionTime: response.execution_time,
         generatedSql,
-        explanation: response.explanation || 'Query executed successfully.',
+        explanation: response.explanation,
       };
-
+ 
       setResult(queryResult);
-
+ 
       // Add to history
       const historyItem: QueryHistoryItem = {
         id: `query-${Date.now()}`,
@@ -435,12 +467,13 @@ export default function NLQueryPage() {
         executionTime: queryResult.executionTime,
       };
       setQueryHistory(prev => [historyItem, ...prev.slice(0, 19)]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Query execution failed');
+    } catch (err: any) {
+      const errorMessage = err?.message || err?.data?.detail || 'Query execution failed';
+      setError(errorMessage);
     } finally {
       setIsRunning(false);
     }
-  }, [session?.id, generatedSql, naturalQuery, profile]);
+  }, [session?.id, generatedSql, naturalQuery]);
 
   // Handle suggestion click
   const handleSuggestionClick = useCallback((suggestion: QuerySuggestion) => {
@@ -644,6 +677,8 @@ export default function NLQueryPage() {
                       isRunning={isRunning}
                       isEditing={isEditing}
                       onEditToggle={() => setIsEditing(!isEditing)}
+                      tableName={tableName}
+                      explanation={sqlExplanation}
                     />
                   )}
 
@@ -697,61 +732,4 @@ export default function NLQueryPage() {
       </main>
     </div>
   );
-}
-
-// =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-function generateMockSql(query: string, profile: DataProfile | null): string {
-  const columns = profile?.columns.map(c => c.name) || ['id', 'name', 'value', 'date'];
-  const tableName = 'data';
-
-  const lowerQuery = query.toLowerCase();
-
-  if (lowerQuery.includes('top') || lowerQuery.includes('highest')) {
-    const limit = lowerQuery.match(/\d+/)?.[0] || '10';
-    return `SELECT *\nFROM ${tableName}\nORDER BY ${columns[2] || 'value'} DESC\nLIMIT ${limit}`;
-  }
-
-  if (lowerQuery.includes('total') || lowerQuery.includes('sum')) {
-    return `SELECT ${columns[1] || 'category'}, SUM(${columns[2] || 'value'}) as total\nFROM ${tableName}\nGROUP BY ${columns[1] || 'category'}\nORDER BY total DESC`;
-  }
-
-  if (lowerQuery.includes('average') || lowerQuery.includes('avg')) {
-    return `SELECT ${columns[1] || 'category'}, AVG(${columns[2] || 'value'}) as average\nFROM ${tableName}\nGROUP BY ${columns[1] || 'category'}`;
-  }
-
-  if (lowerQuery.includes('count')) {
-    return `SELECT ${columns[1] || 'category'}, COUNT(*) as count\nFROM ${tableName}\nGROUP BY ${columns[1] || 'category'}\nORDER BY count DESC`;
-  }
-
-  if (lowerQuery.includes('over') || lowerQuery.includes('>')) {
-    const amount = lowerQuery.match(/\$?([\d,]+)/)?.[1]?.replace(',', '') || '1000';
-    return `SELECT *\nFROM ${tableName}\nWHERE ${columns[2] || 'value'} > ${amount}`;
-  }
-
-  return `SELECT ${columns.slice(0, 4).join(', ')}\nFROM ${tableName}\nLIMIT 100`;
-}
-
-function generateMockData(profile: DataProfile | null): any[][] {
-  const rows = [];
-  const numCols = profile?.columns.length || 4;
-
-  for (let i = 0; i < 25; i++) {
-    const row = [];
-    for (let j = 0; j < numCols; j++) {
-      const col = profile?.columns[j];
-      if (col?.type.includes('int') || col?.type.includes('float')) {
-        row.push(Math.round(Math.random() * 10000));
-      } else if (col?.type.includes('date')) {
-        row.push(new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
-      } else {
-        row.push(`Value ${i + 1}`);
-      }
-    }
-    rows.push(row);
-  }
-
-  return rows;
 }

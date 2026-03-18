@@ -277,7 +277,8 @@ interface DashboardState {
 
 export const useDashboardStore = create<DashboardState>()(
   devtools(
-    immer((set) => ({
+    persist(
+      immer((set) => ({
       // Initial state
       currentDashboard: null,
       dashboards: [],
@@ -390,6 +391,14 @@ export const useDashboardStore = create<DashboardState>()(
           state.hasUnsavedChanges = hasChanges;
         }),
     })),
+      {
+        name: 'dashboard-storage',
+        partialize: (state) => ({
+          dashboards: state.dashboards,
+          currentDashboard: state.currentDashboard,
+        }),
+      }
+    ),
     { name: 'dashboard-store' }
   )
 );

@@ -16,6 +16,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { motion, AnimatePresence } from 'framer-motion';
+import { api } from '@/lib/api/client';
 import {
   Users,
   Share2,
@@ -48,6 +49,9 @@ import {
   Bookmark,
   AtSign,
   Hash,
+  Loader2,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 
 // =============================================================================
@@ -627,199 +631,185 @@ export default function CollaborationPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [newComment, setNewComment] = useState('');
 
-  // Initialize with sample data
-  useEffect(() => {
-    const currentUser: TeamMember = {
-      id: 'user-1',
-      name: 'John Doe',
-      email: 'john@company.com',
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+ 
+  // Default user for display
+  const currentUser: TeamMember = {
+    id: 'user-1',
+    name: 'You',
+    email: 'user@company.com',
+    role: 'owner',
+    isOnline: true,
+  };
+ 
+  // Helper to convert backend format to frontend format
+  const convertWorkspace = (w: any): Workspace => ({
+    id: w.id,
+    name: w.name,
+    description: w.description || '',
+    icon: w.icon || 'folder',
+    members: [currentUser],
+    resourceCount: w.resource_count || 0,
+    createdAt: new Date(w.created_at),
+    isDefault: w.is_default || false,
+  });
+ 
+  const convertResource = (r: any): SharedResource => ({
+    id: r.id,
+    name: r.name,
+    type: r.type as ResourceType,
+    description: r.description || '',
+    visibility: r.visibility as VisibilityLevel,
+    owner: {
+      id: r.owner_id || 'user-1',
+      name: r.owner_name || 'You',
+      email: 'user@company.com',
       role: 'owner',
       isOnline: true,
-    };
-
-    const sampleMembers: TeamMember[] = [
-      currentUser,
-      { id: 'user-2', name: 'Sarah Smith', email: 'sarah@company.com', role: 'admin', isOnline: true },
-      { id: 'user-3', name: 'Mike Johnson', email: 'mike@company.com', role: 'editor', isOnline: false, lastActive: new Date(Date.now() - 2 * 60 * 60 * 1000) },
-      { id: 'user-4', name: 'Emily Brown', email: 'emily@company.com', role: 'viewer', isOnline: true },
-    ];
-
-    setWorkspaces([
-      {
-        id: 'ws-1',
-        name: 'General',
-        description: 'Default workspace for all team members',
-        icon: 'folder',
-        members: sampleMembers,
-        resourceCount: 12,
-        createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
-        isDefault: true,
-      },
-      {
-        id: 'ws-2',
-        name: 'Marketing',
-        description: 'Marketing team dashboards and reports',
-        icon: 'chart',
-        members: sampleMembers.slice(0, 3),
-        resourceCount: 8,
-        createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
-        isDefault: false,
-      },
-      {
-        id: 'ws-3',
-        name: 'Sales Analytics',
-        description: 'Sales performance tracking',
-        icon: 'star',
-        members: sampleMembers.slice(0, 2),
-        resourceCount: 5,
-        createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-        isDefault: false,
-      },
-    ]);
-
-    setSelectedWorkspace('ws-1');
-
-    setResources([
-      {
-        id: 'res-1',
-        name: 'Q4 Sales Dashboard',
-        type: 'dashboard',
-        description: 'Comprehensive Q4 sales performance metrics and KPIs',
-        visibility: 'team',
-        owner: currentUser,
-        sharedWith: sampleMembers,
-        workspaceId: 'ws-1',
-        createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-        updatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
-        viewCount: 145,
-        likeCount: 23,
-        commentCount: 8,
-      },
-      {
-        id: 'res-2',
-        name: 'Customer Churn Analysis',
-        type: 'analysis',
-        description: 'Analysis of customer churn patterns and retention strategies',
-        visibility: 'organization',
-        owner: sampleMembers[1],
-        sharedWith: sampleMembers.slice(0, 3),
-        workspaceId: 'ws-1',
-        createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
-        updatedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-        viewCount: 89,
-        likeCount: 15,
-        commentCount: 5,
-      },
-      {
-        id: 'res-3',
-        name: 'Weekly Revenue Report',
-        type: 'report',
-        description: 'Automated weekly revenue summary and trends',
-        visibility: 'team',
-        owner: sampleMembers[2],
-        sharedWith: sampleMembers,
-        workspaceId: 'ws-1',
-        createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-        updatedAt: new Date(Date.now() - 12 * 60 * 60 * 1000),
-        viewCount: 67,
-        likeCount: 8,
-        commentCount: 3,
-      },
-    ]);
-
-    setActivities([
-      {
-        id: 'act-1',
-        type: 'share',
-        actor: currentUser,
-        content: 'shared "Q4 Sales Dashboard" with the team',
-        timestamp: new Date(Date.now() - 30 * 60 * 1000),
-      },
-      {
-        id: 'act-2',
-        type: 'comment',
-        actor: sampleMembers[1],
-        content: 'commented on "Customer Churn Analysis"',
-        timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      },
-      {
-        id: 'act-3',
-        type: 'edit',
-        actor: sampleMembers[2],
-        content: 'updated "Weekly Revenue Report"',
-        timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000),
-      },
-      {
-        id: 'act-4',
-        type: 'like',
-        actor: sampleMembers[3],
-        content: 'liked "Q4 Sales Dashboard"',
-        timestamp: new Date(Date.now() - 8 * 60 * 60 * 1000),
-      },
-    ]);
-
-    setComments([
-      {
-        id: 'comment-1',
-        resourceId: 'res-1',
-        author: sampleMembers[1],
-        content: 'Great dashboard! Can we add a regional breakdown?',
-        mentions: [],
-        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-        replies: [
-          {
-            id: 'comment-1-1',
-            resourceId: 'res-1',
-            author: currentUser,
-            content: 'Sure, I will add that today.',
-            mentions: ['Sarah Smith'],
-            createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000),
-            replies: [],
-            likes: 1,
-          },
-        ],
-        likes: 3,
-      },
-    ]);
+    },
+    sharedWith: [],
+    workspaceId: r.workspace_id,
+    createdAt: new Date(r.created_at),
+    updatedAt: new Date(r.updated_at),
+    viewCount: r.view_count || 0,
+    likeCount: r.like_count || 0,
+    commentCount: r.comment_count || 0,
+  });
+ 
+  const convertActivity = (a: any): ActivityItem => ({
+    id: a.id,
+    type: a.type as ActivityType,
+    actor: {
+      id: 'user-1',
+      name: a.actor_name || 'You',
+      email: 'user@company.com',
+      role: 'owner',
+      isOnline: true,
+    },
+    content: a.content,
+    timestamp: new Date(a.timestamp),
+  });
+ 
+  const convertComment = (c: any): Comment => ({
+    id: c.id,
+    resourceId: c.resource_id,
+    author: {
+      id: c.author_id || 'user-1',
+      name: c.author_name || 'You',
+      email: 'user@company.com',
+      role: 'owner',
+      isOnline: true,
+    },
+    content: c.content,
+    mentions: c.mentions || [],
+    createdAt: new Date(c.created_at),
+    replies: [],
+    likes: c.like_count || 0,
+  });
+ 
+  // Load data from backend
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [workspacesData, activityData] = await Promise.all([
+        api.collaboration.listWorkspaces(),
+        api.collaboration.getActivityFeed(undefined, 50),
+      ]);
+ 
+      const convertedWorkspaces = workspacesData.map(convertWorkspace);
+      setWorkspaces(convertedWorkspaces);
+      setActivities(activityData.map(convertActivity));
+ 
+      // Select first workspace if none selected
+      if (convertedWorkspaces.length > 0 && !selectedWorkspace) {
+        const defaultWs = convertedWorkspaces.find(w => w.isDefault) || convertedWorkspaces[0];
+        setSelectedWorkspace(defaultWs.id);
+      }
+    } catch (err) {
+      console.error('Failed to load data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedWorkspace]);
+ 
+  // Load resources when workspace changes
+  const loadWorkspaceResources = useCallback(async (workspaceId: string) => {
+    try {
+      const resourcesData = await api.collaboration.listResources(workspaceId);
+      setResources(resourcesData.map(convertResource));
+    } catch (err) {
+      console.error('Failed to load resources:', err);
+    }
   }, []);
-
-  const handleCreateWorkspace = useCallback((data: Partial<Workspace>) => {
-    const newWorkspace: Workspace = {
-      id: `ws-${Date.now()}`,
-      name: data.name || 'New Workspace',
-      description: data.description || '',
-      icon: data.icon || 'folder',
-      members: [],
-      resourceCount: 0,
-      createdAt: new Date(),
-      isDefault: false,
-    };
-    setWorkspaces(prev => [...prev, newWorkspace]);
-    setSelectedWorkspace(newWorkspace.id);
+ 
+  // Load comments when resource is selected
+  const loadResourceComments = useCallback(async (resourceId: string) => {
+    try {
+      const commentsData = await api.collaboration.getComments(resourceId);
+      setComments(commentsData.map(convertComment));
+    } catch (err) {
+      console.error('Failed to load comments:', err);
+    }
   }, []);
-
-  const handleAddComment = useCallback(() => {
+ 
+  // Load data on mount
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+ 
+  // Load resources when workspace changes
+  useEffect(() => {
+    if (selectedWorkspace) {
+      loadWorkspaceResources(selectedWorkspace);
+    }
+  }, [selectedWorkspace, loadWorkspaceResources]);
+ 
+  // Load comments when resource is selected
+  useEffect(() => {
+    if (selectedResource) {
+      loadResourceComments(selectedResource.id);
+    }
+  }, [selectedResource, loadResourceComments]);
+ 
+  const handleCreateWorkspace = useCallback(async (data: Partial<Workspace>) => {
+    try {
+      const created = await api.collaboration.createWorkspace({
+        name: data.name || 'New Workspace',
+        description: data.description || '',
+        icon: data.icon || 'folder',
+      });
+      setWorkspaces(prev => [...prev, convertWorkspace(created)]);
+      setSelectedWorkspace(created.id);
+      // Refresh activity feed
+      const activityData = await api.collaboration.getActivityFeed(undefined, 50);
+      setActivities(activityData.map(convertActivity));
+    } catch (err) {
+      console.error('Failed to create workspace:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create workspace');
+    }
+  }, []);
+ 
+  const handleAddComment = useCallback(async () => {
     if (!newComment.trim() || !selectedResource) return;
-
-    const comment: Comment = {
-      id: `comment-${Date.now()}`,
-      resourceId: selectedResource.id,
-      author: {
-        id: 'user-1',
-        name: 'John Doe',
-        email: 'john@company.com',
-        role: 'owner',
-        isOnline: true,
-      },
-      content: newComment,
-      mentions: [],
-      createdAt: new Date(),
-      replies: [],
-      likes: 0,
-    };
-
-    setComments(prev => [comment, ...prev]);
-    setNewComment('');
+ 
+    try {
+      const created = await api.collaboration.addComment(
+        selectedResource.id,
+        newComment,
+        []
+      );
+      setComments(prev => [convertComment(created), ...prev]);
+      setNewComment('');
+      // Refresh activity feed
+      const activityData = await api.collaboration.getActivityFeed(undefined, 50);
+      setActivities(activityData.map(convertActivity));
+    } catch (err) {
+      console.error('Failed to add comment:', err);
+      setError(err instanceof Error ? err.message : 'Failed to add comment');
+    }
   }, [newComment, selectedResource]);
 
   const currentWorkspace = workspaces.find(w => w.id === selectedWorkspace);
@@ -900,14 +890,42 @@ export default function CollaborationPage() {
                     className="w-full pl-10 pr-4 py-2 bg-surface border border-border rounded-lg text-foreground placeholder:text-foreground-muted focus:outline-none focus:ring-2 focus:ring-brand-600/50"
                   />
                 </div>
+                <button
+                  onClick={loadData}
+                  disabled={isLoading}
+                  className="p-2 hover:bg-surface-hover rounded-lg transition-colors disabled:opacity-50"
+                  title="Refresh"
+                >
+                  <RefreshCw className={`w-5 h-5 text-foreground-muted ${isLoading ? 'animate-spin' : ''}`} />
+                </button>
               </div>
             </div>
           </div>
 
+          {/* Error display */}
+          {error && (
+            <div className="mx-6 mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-2 text-red-500">
+                <AlertTriangle className="w-5 h-5" />
+                <span>{error}</span>
+              </div>
+              <button
+                onClick={() => setError(null)}
+                className="p-1 hover:bg-red-500/20 rounded"
+              >
+                <X className="w-4 h-4 text-red-500" />
+              </button>
+            </div>
+          )}
+
           {/* Resources grid */}
           <div className="flex-1 overflow-auto p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredResources.length === 0 ? (
+              {isLoading ? (
+                <div className="col-span-full flex items-center justify-center py-16">
+                  <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+                </div>
+              ) : filteredResources.length === 0 ? (
                 <div className="col-span-full text-center py-16">
                   <Folder className="w-12 h-12 text-foreground-muted mx-auto mb-4 opacity-50" />
                   <p className="text-foreground-muted">No shared resources yet</p>
